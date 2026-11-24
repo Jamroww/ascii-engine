@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import type { FrameContext, IRenderLayer } from '../core/types';
 import { GlyphAtlas } from './GlyphAtlas';
+import { SDF_RANGE } from '../core/TerrainGrid';
+import type { TerrainGrid } from '../core/TerrainGrid';
 
 export interface WaterLight {
   x: number;
@@ -29,6 +31,9 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
   uniform float uTime;
   uniform vec2 uPlayerPos;
   uniform float uCellSize;
+  uniform sampler2D uTerrainMap;
+  uniform float uWorldSize;
+  uniform float uSdfRange;
   uniform float uWaterGlyphs[6];  // [ '.', ':', '-', '~', 'o', '*' ]
   uniform float uRockGlyphs[3];   // [ '#', '=', '.' ]
   uniform float uBlightGlyphs[4]; // [ '%', '?', '!', '#' ]
@@ -74,13 +79,8 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     return texture2D(uAtlas, atlasUv).a;
   }
 
-  // Signed distance to the curving river channel
-  float riverSDF(vec2 p) {
-    float curve = sin(p.y * 0.14) * 3.2 + cos(p.y * 0.07) * 1.5;
-    float centerX = 6.5 + curve;
-    float halfWidth = 3.8 + sin(p.y * 0.22) * 0.6;
-    return abs(p.x - centerX) - halfWidth;
-  }
+  // Signed distance to the curving river channel is read from the shared
+  // TerrainGrid texture (R channel, 128 == shoreline).
 
   // Elongated downstream wake behind a boulder (current flows toward -Y)
   float rockWake(vec2 cellWorld, vec2 rockPos, float radius) {
@@ -97,8 +97,14 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     vec2 cellUv = fract(vWorldPos / uCellSize);
     vec2 cellWorld = (gridCoord + 0.5) * uCellSize;
 
+    // Sample the shared terrain field (R = river SDF, G = blight, B = path).
+    vec2 terrainUv = (cellWorld + uWorldSize * 0.5) / uWorldSize;
+    vec4 terrainData = texture2D(uTerrainMap, terrainUv);
+
+    // Decode the river signed distance field from the R channel (128 == shoreline).
+    float edgeDist = (terrainData.r * 255.0 - 128.0) / 128.0 * uSdfRange;
+
     // 1. Clip to river channel
-    float edgeDist = riverSDF(cellWorld);
     if (edgeDist > 0.0) discard;
 
     // Deep obsidian river bed behind glyphs
@@ -138,7 +144,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     }
 
     // 3. Upstream Trace Blight factor (starts creeping in north of y = 7.5)
-    float blightZone = smoothstep(6.5, 16.0, cellWorld.y + sin(cellWorld.x * 0.5) * 1.6);
+    float blightZone = terrainData.g;
     float blightPulse = noise(cellWorld * 0.55 + vec2(0.0, uTime * 0.9));
     float blightMask = blightZone * smoothstep(0.32, 0.72, blightPulse);
 
@@ -248,7 +254,7 @@ export class WaterLayer implements IRenderLayer {
   public readonly object3D: THREE.Mesh;
   private readonly material: THREE.ShaderMaterial;
 
-  constructor(atlas: GlyphAtlas, areaSize = 60, cellSize = 0.32) {
+  constructor(atlas: GlyphAtlas, terrain: TerrainGrid, areaSize = 60, cellSize = 0.32) {
     const geometry = new THREE.PlaneGeometry(areaSize, areaSize);
 
     const waterGlyphs = [
@@ -282,6 +288,9 @@ export class WaterLayer implements IRenderLayer {
         uTime: { value: 0 },
         uPlayerPos: { value: new THREE.Vector2(0, 0) },
         uCellSize: { value: cellSize },
+        uTerrainMap: { value: terrain.texture },
+        uWorldSize: { value: terrain.worldSize },
+        uSdfRange: { value: SDF_RANGE },
         uWaterGlyphs: { value: waterGlyphs },
         uRockGlyphs: { value: rockGlyphs },
         uBlightGlyphs: { value: blightGlyphs },

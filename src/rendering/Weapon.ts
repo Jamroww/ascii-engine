@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GlyphAtlas } from './GlyphAtlas';
-import { createSword } from './propAssets';
+import type { AsciiPropAsset, AsciiPropCell } from '../core/types';
 
 const WEAPON_VERTEX_SHADER = /* glsl */ `
   attribute float aGlyphIndex;
@@ -45,6 +45,64 @@ const WEAPON_FRAGMENT_SHADER = /* glsl */ `
   }
 `;
 
+type RGB = [number, number, number];
+
+/**
+ * Build an AsciiPropAsset from a list of string rows (top-to-bottom, y = 0 is
+ * the base). Each non-space character is coloured via the supplied palette.
+ */
+function buildProp(
+  name: string,
+  rows: string[],
+  palette: Record<string, RGB>,
+  fallback: RGB = [0.6, 0.6, 0.6]
+): AsciiPropAsset {
+  const height = rows.length;
+  let width = 0;
+  for (const row of rows) width = Math.max(width, row.length);
+
+  const cells: AsciiPropCell[] = [];
+  for (let r = 0; r < height; r++) {
+    const line = rows[r];
+    const y = height - 1 - r;
+    for (let x = 0; x < line.length; x++) {
+      const char = line[x];
+      if (char === ' ') continue;
+      const [cr, cg, cb] = palette[char] ?? fallback;
+      cells.push({ x, y, char, r: cr, g: cg, b: cb });
+    }
+  }
+
+  return { name, width, height, cells };
+}
+
+const SWORD_PALETTE: Record<string, RGB> = {
+  '^': [0.85, 0.88, 0.92],
+  '|': [0.72, 0.76, 0.82],
+  '/': [0.62, 0.67, 0.74],
+  '\\': [0.62, 0.67, 0.74],
+  '#': [0.5, 0.38, 0.28],
+  o: [0.85, 0.7, 0.35],
+};
+
+/** A top-down sword sprite pointing up, with the hilt at the bottom centre (the pivot). */
+function createSword(): AsciiPropAsset {
+  return buildProp(
+    'sword',
+    [
+      '    ^    ',
+      '   /|\\   ',
+      '   /|\\   ',
+      '   /|\\   ',
+      '    |    ',
+      '   /#\\   ',
+      '    |    ',
+      '    o    ',
+    ],
+    SWORD_PALETTE
+  );
+}
+
 export class Weapon {
   public readonly object3D = new THREE.Group();
 
@@ -54,7 +112,13 @@ export class Weapon {
   private angle = 0;
   private swinging = false;
   private swingT = 0;
+  private swingCount = 0;
   private readonly swingDuration = 0.22;
+
+  /** How far the blade reaches from the traveler's centre, in world units. */
+  public readonly reach = 1.9;
+  /** Half the angular width of the swing arc, in radians. */
+  public readonly arcHalfAngle = Math.PI / 2.4;
 
   constructor(atlas: GlyphAtlas) {
     const sword = createSword();
@@ -130,7 +194,23 @@ export class Weapon {
     if (!this.swinging) {
       this.swinging = true;
       this.swingT = 0;
+      this.swingCount += 1;
     }
+  }
+
+  /** True while a swing is in flight. */
+  public get isSwinging(): boolean {
+    return this.swinging;
+  }
+
+  /** Increments once per new swing so the combat system can dedupe hits. */
+  public get swingId(): number {
+    return this.swingCount;
+  }
+
+  /** The aim direction (radians, atan2 convention) of the current or last swing. */
+  public get aimAngle(): number {
+    return this.angle;
   }
 
   public dispose(): void {

@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { GlyphAtlas } from './GlyphAtlas';
+import type { TerrainGrid } from '../core/TerrainGrid';
+import type { FrameContext, IRenderLayer } from '../core/types';
 
 const GROUND_VERTEX_SHADER = /* glsl */ `
   attribute float aGlyphIndex;
@@ -62,11 +64,15 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
   }
 `;
 
-export class GroundLayer {
+export class GroundLayer implements IRenderLayer {
   public readonly mesh: THREE.InstancedMesh;
   private readonly material: THREE.ShaderMaterial;
 
-  constructor(atlas: GlyphAtlas, width = 100, height = 100, cellSize = 0.6) {
+  public get object3D(): THREE.Object3D {
+    return this.mesh;
+  }
+
+  constructor(atlas: GlyphAtlas, terrain: TerrainGrid, width = 100, height = 100, cellSize = 0.6) {
     const count = width * height;
     const geometry = new THREE.PlaneGeometry(cellSize, cellSize);
 
@@ -98,8 +104,7 @@ export class GroundLayer {
         const rand = hash - Math.floor(hash);
 
         // A winding dirt footpath leading from spawn toward the river.
-        const pathY = Math.sin(wx * 0.55) * 1.3;
-        const onPath = Math.abs(wy - pathY) < 0.8 && wx > -6 && wx < 9;
+        const onPath = terrain.getPathMask(wx, wy) > 0.6;
 
         let char: string;
         let r: number;
@@ -174,9 +179,9 @@ export class GroundLayer {
     this.mesh.instanceMatrix.needsUpdate = true;
   }
 
-  public update(playerX: number, playerY: number, elapsedTime: number): void {
-    this.material.uniforms.uPlayerPos.value.set(playerX, playerY);
-    this.material.uniforms.uTime.value = elapsedTime;
+  public update(ctx: FrameContext): void {
+    this.material.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
+    this.material.uniforms.uTime.value = ctx.elapsed;
   }
 
   public dispose(): void {

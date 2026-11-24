@@ -19,6 +19,11 @@ export class CollisionSystem {
     return this.colliders.length;
   }
 
+  /** Read-only snapshot of the registered colliders (used by the editor overlay). */
+  getAll(): CircleCollider[] {
+    return [...this.colliders];
+  }
+
   /**
    * Push a moving circle out of every overlapping collider. Runs a couple of
    * passes so adjacent trunks / rocks settle into a stable position.

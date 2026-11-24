@@ -95,9 +95,7 @@ ascii-engine/
     │   ├── WeatherLayer.ts # Rain, fireflies/spores, drifting petals (instanced particles)
     │   ├── AtmosphereLayer.ts # Screen-space-ish vignette + distance fog overlay
     │   ├── AsciiCharPass.ts # ★ Offscreen 3D character → ASCII billboard + portrait read-back
-    │   ├── Weapon.ts       # Top-down sword sprite that aims at the mouse and swings
-    │   ├── PropLayer.ts    # (legacy) generic ASCII-prop renderer — now unused by main
-    │   └── propAssets.ts   # (legacy) prop builders; still supplies createSword() for Weapon
+    │   └── Weapon.ts       # Top-down sword sprite that aims at the mouse and swings
     │
     ├── ui/
     │   └── Hud.ts          # DOM HUD: live portrait + health/stamina bars
@@ -193,7 +191,3 @@ an ASCII-prop JSON. It needs `sharp` (already a devDependency).
 ### Dead weight you can delete
 - `src/counter.ts` and `src/assets/*` — unused Vite-template leftovers.
 - The empty `mkdir` file at the repo root — stray.
-- `src/rendering/PropLayer.ts` and most of `propAssets.ts` — the earlier prop system,
-  superseded by `ForestLayer`/`BuildingLayer`. Keep `propAssets.ts` around for now: its
-  `createSword()` is still imported by `Weapon`, and `PropLayer.ts` still exports the
-  `AsciiPropAsset`/`AsciiPropCell` types that `propAssets` uses.

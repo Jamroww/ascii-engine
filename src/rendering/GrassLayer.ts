@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { GlyphAtlas } from './GlyphAtlas';
+import type { TerrainGrid } from '../core/TerrainGrid';
+import type { FrameContext, IRenderLayer } from '../core/types';
 
 const GRASS_VERTEX_SHADER = /* glsl */ `
   attribute float aGlyphIndex;
@@ -96,11 +98,15 @@ const GRASS_FRAGMENT_SHADER = /* glsl */ `
   }
 `;
 
-export class GrassLayer {
+export class GrassLayer implements IRenderLayer {
   public readonly mesh: THREE.InstancedMesh;
   private readonly material: THREE.ShaderMaterial;
 
-  constructor(atlas: GlyphAtlas, count = 18000, areaSize = 55) {
+  public get object3D(): THREE.Object3D {
+    return this.mesh;
+  }
+
+  constructor(atlas: GlyphAtlas, terrain: TerrainGrid, count = 18000, areaSize = 55) {
     const geometry = new THREE.PlaneGeometry(0.55, 0.65);
 
     const glyphIndices = new Float32Array(count);
@@ -133,8 +139,7 @@ export class GrassLayer {
       const x = (Math.random() - 0.5) * areaSize;
       const y = (Math.random() - 0.5) * areaSize;
 
-      const pathY = Math.sin(x * 0.55) * 1.3;
-      const onPath = Math.abs(y - pathY) < 0.85 && x > -6 && x < 9;
+      const onPath = terrain.getPathMask(x, y) > 0.6;
       if (onPath && Math.random() < 0.8) continue;
 
       // Slight Z jitter so overlapping blades don't z-fight
@@ -181,9 +186,9 @@ export class GrassLayer {
     this.mesh.instanceMatrix.needsUpdate = true;
   }
 
-  public update(playerX: number, playerY: number, elapsedTime: number): void {
-    this.material.uniforms.uPlayerPos.value.set(playerX, playerY);
-    this.material.uniforms.uTime.value = elapsedTime;
+  public update(ctx: FrameContext): void {
+    this.material.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
+    this.material.uniforms.uTime.value = ctx.elapsed;
   }
 
   public dispose(): void {

@@ -22,6 +22,22 @@ export interface GlyphCell {
   color: RGB;
 }
 
+export interface AsciiPropCell {
+  x: number;    // Local grid X (0..width-1)
+  y: number;    // Local grid Y (0 = bottom, height-1 = top)
+  char: string; // Single ASCII character
+  r: number;    // 0.0 to 1.0
+  g: number;    // 0.0 to 1.0
+  b: number;    // 0.0 to 1.0
+}
+
+export interface AsciiPropAsset {
+  name: string;
+  width: number;
+  height: number;
+  cells: AsciiPropCell[];
+}
+
 export interface GlyphAtlasConfig {
   charset: string;
   cellSize: number;

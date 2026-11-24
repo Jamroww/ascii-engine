@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { FrameContext, IRenderLayer } from '../core/types';
 import { GlyphAtlas } from './GlyphAtlas';
+import type { TerrainGrid } from '../core/TerrainGrid';
 
 export type TreeKind = 'pine' | 'oak' | 'wilted';
 
@@ -183,7 +184,7 @@ function buildTreeAsset(kind: TreeKind, rows: string[], trunkHeight: number): Tr
   };
 }
 
-function createAncientPine(): TreeAsset {
+export function createAncientPine(): TreeAsset {
   return buildTreeAsset(
     'pine',
     [
@@ -209,7 +210,7 @@ function createAncientPine(): TreeAsset {
   );
 }
 
-function createGnarledOak(): TreeAsset {
+export function createGnarledOak(): TreeAsset {
   return buildTreeAsset(
     'oak',
     [
@@ -231,7 +232,7 @@ function createGnarledOak(): TreeAsset {
   );
 }
 
-function createWiltedTree(): TreeAsset {
+export function createWiltedTree(): TreeAsset {
   return buildTreeAsset(
     'wilted',
     [
@@ -254,13 +255,49 @@ function createWiltedTree(): TreeAsset {
 export class ForestLayer implements IRenderLayer {
   public readonly object3D = new THREE.Group();
 
-  private readonly mesh: THREE.InstancedMesh;
-  private readonly material: THREE.ShaderMaterial;
-  private readonly shadowMaterial: THREE.ShaderMaterial;
-  private readonly shadowMesh: THREE.InstancedMesh;
-  private readonly colliders: Array<{ x: number; y: number; radius: number }> = [];
+  private readonly atlas: GlyphAtlas;
+  private readonly cellSize: number;
+  private mesh!: THREE.InstancedMesh;
+  private material!: THREE.ShaderMaterial;
+  private shadowMaterial!: THREE.ShaderMaterial;
+  private shadowMesh!: THREE.InstancedMesh;
+  private colliders: Array<{ x: number; y: number; radius: number }> = [];
 
   constructor(atlas: GlyphAtlas, placements: TreePlacement[], cellSize = 0.34) {
+    this.atlas = atlas;
+    this.cellSize = cellSize;
+    this.build(placements);
+  }
+
+  /** Rebuild the instanced mesh from a fresh placement list (terrain or entities changed). */
+  public rebuild(placements: TreePlacement[]): void {
+    this.disposeMeshes();
+    this.object3D.clear();
+    this.colliders = [];
+    this.build(placements);
+  }
+
+  public getColliders(): Array<{ x: number; y: number; radius: number }> {
+    return this.colliders;
+  }
+
+  public update(ctx: FrameContext): void {
+    this.material.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
+    this.material.uniforms.uTime.value = ctx.elapsed;
+  }
+
+  public dispose(): void {
+    this.disposeMeshes();
+  }
+
+  private disposeMeshes(): void {
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+    this.shadowMesh.geometry.dispose();
+    this.shadowMaterial.dispose();
+  }
+
+  private build(placements: TreePlacement[]): void {
     const assets: Record<TreeKind, TreeAsset> = {
       pine: createAncientPine(),
       oak: createGnarledOak(),
@@ -279,8 +316,8 @@ export class ForestLayer implements IRenderLayer {
       vertexShader: TREE_VERTEX_SHADER,
       fragmentShader: TREE_FRAGMENT_SHADER,
       uniforms: {
-        uAtlas: { value: atlas.texture },
-        uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
+        uAtlas: { value: this.atlas.texture },
+        uAtlasGrid: { value: new THREE.Vector2(this.atlas.cols, this.atlas.rows) },
         uPlayerPos: { value: new THREE.Vector2(0, 0) },
         uTime: { value: 0 },
       },
@@ -313,7 +350,7 @@ export class ForestLayer implements IRenderLayer {
       const p = sorted[t];
       const asset = assets[p.kind];
       const scale = p.scale ?? 1.0;
-      const size = cellSize * scale;
+      const size = this.cellSize * scale;
       const halfW = (asset.width * size) / 2;
       const phase = (p.worldX * 0.37 + p.worldY * 0.71) % (Math.PI * 2);
 
@@ -342,7 +379,7 @@ export class ForestLayer implements IRenderLayer {
         dummy.updateMatrix();
         this.mesh.setMatrixAt(cellIdx, dummy.matrix);
 
-        glyphIndices[cellIdx] = atlas.getIndex(cell.char);
+        glyphIndices[cellIdx] = this.atlas.getIndex(cell.char);
         colors[cellIdx * 3 + 0] = cell.r;
         colors[cellIdx * 3 + 1] = cell.g;
         colors[cellIdx * 3 + 2] = cell.b;
@@ -361,22 +398,6 @@ export class ForestLayer implements IRenderLayer {
 
     this.object3D.add(this.shadowMesh, this.mesh);
   }
-
-  public getColliders(): Array<{ x: number; y: number; radius: number }> {
-    return this.colliders;
-  }
-
-  public update(ctx: FrameContext): void {
-    this.material.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
-    this.material.uniforms.uTime.value = ctx.elapsed;
-  }
-
-  public dispose(): void {
-    this.mesh.geometry.dispose();
-    this.material.dispose();
-    this.shadowMesh.geometry.dispose();
-    this.shadowMaterial.dispose();
-  }
 }
 
 /** Deterministic pseudo-random helper so the forest layout stays consistent across reloads */
@@ -389,26 +410,16 @@ function seededRand(seed: number): () => number {
   };
 }
 
-/** Matches WaterLayer's riverSDF so trees don't spawn inside the river */
-function riverDistance(x: number, y: number): number {
-  const curve = Math.sin(y * 0.14) * 3.2 + Math.cos(y * 0.07) * 1.5;
-  const centerX = 6.5 + curve;
-  const halfWidth = 3.8 + Math.sin(y * 0.22) * 0.6;
-  return Math.abs(x - centerX) - halfWidth;
-}
-
 /** Generates a dense, looming forest framing a large Riverside Village clearing */
-export function generateRiversideForest(seed = 42): TreePlacement[] {
+export function generateRiversideForest(terrain: TerrainGrid, seed = 42): TreePlacement[] {
   const rand = seededRand(seed);
   const placements: TreePlacement[] = [];
 
   const isBlocked = (x: number, y: number): boolean => {
     // Keep the river channel + banks clear
-    if (riverDistance(x, y) < 2.2) return true;
-    // Keep the central Riverside Village clearing & cottage yard open
-    if (Math.hypot(x + 3, y - 1) < 13.5) return true;
-    // Keep a winding northern trail open toward the upstream Blight
-    if (x > -2.5 && x < 4.5 && y > 6 && y < 38) return true;
+    if (terrain.getRiverSDF(x, y) < 2.2) return true;
+    // Keep the footpath, village clearing and northern trail clear
+    if (terrain.getPathMask(x, y) > 0.15) return true;
     // Avoid stacking trunks directly on top of each other
     for (const p of placements) {
       if (Math.hypot(x - p.worldX, y - p.worldY) < 3.6) return true;

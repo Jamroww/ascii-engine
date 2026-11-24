@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { FrameContext, IRenderLayer } from '../core/types';
 import { GlyphAtlas } from './GlyphAtlas';
+import type { WaterLight } from './WaterLayer';
 
 export interface BuildingCell {
   x: number;
@@ -136,13 +137,77 @@ const LIGHT_SPILL_FRAGMENT_SHADER = /* glsl */ `
 export class BuildingLayer implements IRenderLayer {
   public readonly object3D = new THREE.Group();
 
-  private readonly mesh: THREE.InstancedMesh;
-  private readonly material: THREE.ShaderMaterial;
-  private readonly spillMaterials: THREE.ShaderMaterial[] = [];
-  private readonly spillMeshes: THREE.Mesh[] = [];
-  private readonly colliders: Array<{ x: number; y: number; radius: number }> = [];
+  private readonly atlas: GlyphAtlas;
+  private mesh!: THREE.InstancedMesh;
+  private material!: THREE.ShaderMaterial;
+  private spillMaterials: THREE.ShaderMaterial[] = [];
+  private spillMeshes: THREE.Mesh[] = [];
+  private colliders: Array<{ x: number; y: number; radius: number }> = [];
+  private placements: BuildingPlacement[] = [];
 
   constructor(atlas: GlyphAtlas, placements: BuildingPlacement[]) {
+    this.atlas = atlas;
+    this.build(placements);
+  }
+
+  /** Rebuild every mesh from a fresh placement list (entities changed). */
+  public rebuild(placements: BuildingPlacement[]): void {
+    this.disposeResources();
+    this.object3D.clear();
+    this.colliders = [];
+    this.placements = [];
+    this.build(placements);
+  }
+
+  /** Optional helper if you want to register building footprints with CollisionSystem */
+  public getColliders(): Array<{ x: number; y: number; radius: number }> {
+    return this.colliders;
+  }
+
+  /** World-space light points (windows / lanterns) for WaterLayer reflections. */
+  public getWaterLights(): WaterLight[] {
+    const lights: WaterLight[] = [];
+    for (const p of this.placements) {
+      const size = p.cellSize ?? 0.36;
+      for (const l of p.asset.lights) {
+        lights.push({
+          x: p.worldX + l.x * size,
+          y: p.worldY + l.y * size,
+          radius: l.radius * size,
+          r: l.r,
+          g: l.g,
+          b: l.b,
+        });
+      }
+    }
+    return lights;
+  }
+
+  public update(ctx: FrameContext): void {
+    this.material.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
+    this.material.uniforms.uTime.value = ctx.elapsed;
+
+    for (const mat of this.spillMaterials) {
+      mat.uniforms.uTime.value = ctx.elapsed;
+    }
+  }
+
+  public dispose(): void {
+    this.disposeResources();
+  }
+
+  private disposeResources(): void {
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+    for (const m of this.spillMeshes) m.geometry.dispose();
+    for (const mat of this.spillMaterials) mat.dispose();
+    this.spillMeshes = [];
+    this.spillMaterials = [];
+  }
+
+  private build(placements: BuildingPlacement[]): void {
+    this.placements = placements.slice();
+
     const totalCells = placements.reduce((sum, p) => sum + p.asset.cells.length, 0);
     const geometry = new THREE.PlaneGeometry(1.02, 1.02);
 
@@ -154,8 +219,8 @@ export class BuildingLayer implements IRenderLayer {
       vertexShader: BUILDING_VERTEX_SHADER,
       fragmentShader: BUILDING_FRAGMENT_SHADER,
       uniforms: {
-        uAtlas: { value: atlas.texture },
-        uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
+        uAtlas: { value: this.atlas.texture },
+        uAtlasGrid: { value: new THREE.Vector2(this.atlas.cols, this.atlas.rows) },
         uPlayerPos: { value: new THREE.Vector2(0, 0) },
         uTime: { value: 0 },
       },
@@ -191,7 +256,7 @@ export class BuildingLayer implements IRenderLayer {
         dummy.updateMatrix();
         this.mesh.setMatrixAt(i, dummy.matrix);
 
-        glyphIndices[i] = atlas.getIndex(cell.char);
+        glyphIndices[i] = this.atlas.getIndex(cell.char);
         colors[i * 3 + 0] = cell.r;
         colors[i * 3 + 1] = cell.g;
         colors[i * 3 + 2] = cell.b;
@@ -237,27 +302,6 @@ export class BuildingLayer implements IRenderLayer {
     this.mesh.instanceMatrix.needsUpdate = true;
 
     this.object3D.add(this.mesh);
-  }
-
-  /** Optional helper if you want to register building footprints with CollisionSystem */
-  public getColliders(): Array<{ x: number; y: number; radius: number }> {
-    return this.colliders;
-  }
-
-  public update(ctx: FrameContext): void {
-    this.material.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
-    this.material.uniforms.uTime.value = ctx.elapsed;
-
-    for (const mat of this.spillMaterials) {
-      mat.uniforms.uTime.value = ctx.elapsed;
-    }
-  }
-
-  public dispose(): void {
-    this.mesh.geometry.dispose();
-    this.material.dispose();
-    for (const m of this.spillMeshes) m.geometry.dispose();
-    for (const mat of this.spillMaterials) mat.dispose();
   }
 }
 

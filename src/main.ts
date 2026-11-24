@@ -1,8 +1,6 @@
 import './style.css';
 import { Engine } from './core/Engine';
-import { WaterLayer } from './rendering/WaterLayer';
-import { BuildingLayer, createRiversideCottage } from './rendering/BuildingLayer';
-import { ForestLayer, generateRiversideForest } from './rendering/ForestLayer';
+import { LevelManager } from './core/LevelManager';
 import { WeatherLayer } from './rendering/WeatherLayer';
 
 const app = document.querySelector<HTMLDivElement>('#app');
@@ -11,17 +9,17 @@ if (!app) {
 }
 
 const engine = new Engine(app);
+const level = new LevelManager(engine);
 
-const water = new WaterLayer(engine.atlas, 140);
-const forest = new ForestLayer(engine.atlas, generateRiversideForest());
-const buildings = new BuildingLayer(engine.atlas, [
-  { asset: createRiversideCottage(), worldX: -10, worldY: 2 },
-]);
-const weather = new WeatherLayer(engine.atlas);
+level.loadLevel(LevelManager.createDefaultVillageLevel());
 
-engine.addLayer(water);
-engine.addLayer(forest);
-engine.addLayer(buildings);
-engine.addLayer(weather);
+engine.addLayer(new WeatherLayer(engine.atlas));
 
 engine.start();
+
+// Dev-only level editor, tree-shaken out of production builds by Vite.
+if (import.meta.env.DEV) {
+  import('./editor/EditorController').then(({ EditorController }) => {
+    new EditorController(engine, level).initialize();
+  });
+}
