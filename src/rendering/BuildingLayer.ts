@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { FrameContext, IRenderLayer } from '../core/types';
 import { GlyphAtlas } from './GlyphAtlas';
 import type { WaterLight } from './WaterLayer';
+import { yToZ } from '../core/world';
 
 export interface BuildingCell {
   x: number;
@@ -81,8 +82,8 @@ const BUILDING_FRAGMENT_SHADER = /* glsl */ `
 
     // Solid dark architectural backing so grass never pokes through walls or roof
     if (glyphAlpha < 0.15) {
-      vec3 interiorBg = mix(vec3(0.022, 0.026, 0.034), vec3(0.28, 0.13, 0.02) * flicker, vEmissive);
-      gl_FragColor = vec4(interiorBg, 0.96);
+      vec3 interiorBg = mix(vec3(0.03, 0.04, 0.05), vec3(0.28, 0.13, 0.02) * flicker, vEmissive);
+      gl_FragColor = vec4(interiorBg, 0.92);
       return;
     }
 
@@ -98,9 +99,9 @@ const BUILDING_FRAGMENT_SHADER = /* glsl */ `
     float lantern = smoothstep(10.5, 0.5, dist);
     lantern *= lantern;
 
-    vec3 ambient = vColor * vec3(0.32, 0.36, 0.44);
+    vec3 ambient = vColor * vec3(0.46, 0.51, 0.60);
     vec3 lanternTint = vec3(1.0, 0.66, 0.28);
-    vec3 lit = vColor * mix(vec3(1.0), lanternTint, 0.55) * lantern * 1.35;
+    vec3 lit = vColor * mix(vec3(1.0), lanternTint, 0.55) * lantern * 1.5;
 
     gl_FragColor = vec4(ambient + lit, 1.0);
   }
@@ -168,7 +169,7 @@ export class BuildingLayer implements IRenderLayer {
   public getWaterLights(): WaterLight[] {
     const lights: WaterLight[] = [];
     for (const p of this.placements) {
-      const size = p.cellSize ?? 0.36;
+      const size = p.cellSize ?? 0.24;
       for (const l of p.asset.lights) {
         lights.push({
           x: p.worldX + l.x * size,
@@ -225,7 +226,7 @@ export class BuildingLayer implements IRenderLayer {
         uTime: { value: 0 },
       },
       transparent: true,
-      depthWrite: false,
+      depthWrite: true,
     });
 
     this.mesh = new THREE.InstancedMesh(geometry, this.material, totalCells);
@@ -235,7 +236,10 @@ export class BuildingLayer implements IRenderLayer {
     let lightIdx = 0;
 
     for (const p of placements) {
-      const size = p.cellSize ?? 0.36;
+      const size = p.cellSize ?? 0.24;
+      // Unified Y-based depth at the building's base line so it occludes and
+      // is occluded by the player/trees consistently.
+      const z = yToZ(p.worldY);
 
       // Record approximate circular colliders along the building's base footprint
       const worldW = p.asset.width * size;
@@ -250,7 +254,7 @@ export class BuildingLayer implements IRenderLayer {
         dummy.position.set(
           p.worldX + (cell.x + 0.5) * size,
           p.worldY + (cell.y + 0.5) * size,
-          1.0 // Above grass/water/props, just behind the character (1.2)
+          z
         );
         dummy.scale.set(size, size, 1);
         dummy.updateMatrix();
@@ -326,7 +330,7 @@ export function createRiversideCottage(): BuildingAsset {
   ];
 
   const height = layout.length;
-  const width = layout[0].length;
+  const width = Math.max(...layout.map((l) => l.length));
   const cells: BuildingCell[] = [];
 
   for (let r = 0; r < height; r++) {
@@ -363,21 +367,23 @@ export function createRiversideCottage(): BuildingAsset {
         cg = 0.24;
         cb = 0.16;
       } else if (y >= 6) {
-        // Pitched weathered slate roof (darker toward eaves, subtle ridge highlight)
-        const roofShade = 0.75 + ((y - 6) / 6) * 0.35;
-        cr = 0.24 * roofShade;
-        cg = 0.29 * roofShade;
-        cb = 0.35 * roofShade;
+        // Pitched slate roof: cool-blue rim at the ridge, darker toward the eaves.
+        const ridgeT = (y - 6) / 6; // 0 at eaves, 1 at ridge
+        const roofShade = 0.7 + ridgeT * 0.5;
+        cr = 0.26 * roofShade + ridgeT * 0.1;
+        cg = 0.31 * roofShade + ridgeT * 0.12;
+        cb = 0.38 * roofShade + ridgeT * 0.18;
       } else if (raw === '.' || raw === ',') {
-        // Mossy cobblestone foundation
-        cr = 0.28;
-        cg = 0.31;
-        cb = 0.30;
+        // Mossy cobblestone foundation, darker at the base
+        cr = 0.26;
+        cg = 0.29;
+        cb = 0.28;
       } else {
-        // Dark weathered timber framing & plaster
-        cr = 0.40;
-        cg = 0.34;
-        cb = 0.27;
+        // Dark weathered timber framing & plaster (darker toward the base)
+        const wallShade = 0.85 + (y / 6) * 0.3;
+        cr = 0.42 * wallShade;
+        cg = 0.35 * wallShade;
+        cb = 0.27 * wallShade;
       }
 
       cells.push({ x, y, char, r: cr, g: cg, b: cb, emissive });

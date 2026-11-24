@@ -13,7 +13,7 @@ import { Hud } from '../ui/Hud';
 import { WORLD_BOUNDS, PLAYER_RADIUS } from './world';
 import type { TerrainGrid } from './TerrainGrid';
 
-const HITSTOP_DURATION = 0.045;
+const HITSTOP_DURATION = 0.028;
 const SHAKE_DURATION = 0.22;
 const RESPAWN_DELAY = 0.8;
 
@@ -36,7 +36,7 @@ export class Engine {
   public readonly enemies: EnemyManager;
   private readonly layers: IRenderLayer[] = [];
 
-  private viewHeight = 20;
+  private viewHeight = 28;
   private editorMode = false;
   public readonly playerPos = new THREE.Vector2(0, 0);
   private readonly clock = new THREE.Clock();
@@ -124,7 +124,7 @@ export class Engine {
   }
 
   /** Nudge the camera for a short, decaying shake. */
-  public triggerShake(intensity = 0.35, duration = SHAKE_DURATION): void {
+  public triggerShake(intensity = 0.18, duration = SHAKE_DURATION): void {
     this.shakeIntensity = Math.max(this.shakeIntensity, intensity);
     this.shakeTimer = Math.max(this.shakeTimer, duration);
   }
@@ -218,7 +218,7 @@ export class Engine {
     // Camera zoom (scroll in / out).
     const wheel = this.input.takeWheelDelta();
     if (wheel !== 0) {
-      this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 9, 30);
+      this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 22, 38);
       this.applyViewport();
     }
 
@@ -270,8 +270,8 @@ export class Engine {
     this.playerPos.x += (state.moveX * speed + this.knockbackX) * dt;
     this.playerPos.y += (state.moveY * speed + this.knockbackY) * dt;
 
-    // Knockback velocity decays smoothly toward zero.
-    const knockDecay = Math.exp(-6 * dt);
+    // Knockback velocity decays fast so the micro-shove snaps back to control.
+    const knockDecay = Math.exp(-10 * dt);
     this.knockbackX *= knockDecay;
     this.knockbackY *= knockDecay;
 

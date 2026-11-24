@@ -47,6 +47,14 @@ export class LevelManager {
 
     const entities: PlacedEntity[] = [
       { id: 'cottage', kind: 'building', assetId: 'riverside_cottage', x: -10, y: 2 },
+      // Curated hero trees (one or two of each archetype) framed in the open
+      // clearing so every tree type is showcased without cluttering gameplay.
+      { id: 'tree_pine_1', kind: 'tree', assetId: 'ancient_pine', x: -8, y: 9 },
+      { id: 'tree_pine_2', kind: 'tree', assetId: 'ancient_pine', x: -1, y: -9 },
+      { id: 'tree_oak_1', kind: 'tree', assetId: 'gnarled_oak', x: -6, y: -7 },
+      { id: 'tree_oak_2', kind: 'tree', assetId: 'gnarled_oak', x: -14, y: -3 },
+      { id: 'tree_wilted_1', kind: 'tree', assetId: 'wilted_tree', x: -3, y: 12 },
+      { id: 'tree_wilted_2', kind: 'tree', assetId: 'wilted_tree', x: -11, y: 11 },
       // Two fast melee rushers and a stationary spitter in the upstream Blight zone.
       { id: 'enemy_stalker_1', kind: 'enemy', assetId: 'blight_stalker', x: 0, y: 15 },
       { id: 'enemy_stalker_2', kind: 'enemy', assetId: 'blight_stalker', x: 4.5, y: 18 },

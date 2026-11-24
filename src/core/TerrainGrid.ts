@@ -73,10 +73,10 @@ function riverSDF(x: number, y: number): number {
 function pathMaskByte(x: number, y: number): number {
   // Winding dirt footpath leading from spawn toward the river (GroundLayer).
   const pathY = Math.sin(x * 0.55) * 1.3;
-  const onPath = Math.abs(y - pathY) < 0.8 && x > -6 && x < 9;
+  const onPath = Math.abs(y - pathY) < 0.95 && x > -6 && x < 9;
 
   // Central village clearing + cottage yard (ForestLayer).
-  const inVillage = Math.hypot(x + 3, y - 1) < 13.5;
+  const inVillage = Math.hypot(x + 3, y - 1) < 15.0;
 
   // Winding northern trail toward the upstream Blight (ForestLayer).
   const inTrail = x > -2.5 && x < 4.5 && y > 6 && y < 38;

@@ -11,9 +11,12 @@ export interface Enemy {
   assetId: string;
   x: number;
   y: number;
-  /** Current movement velocity (chase / lunge / knockback impulse). */
+  /** Current movement velocity (chase / lunge impulse). */
   vx: number;
   vy: number;
+  /** Separate knockback velocity that decays far faster than movement. */
+  kbx: number;
+  kby: number;
   hp: number;
   maxHp: number;
   state: EnemyState;
@@ -34,8 +37,8 @@ export interface EnemyProjectile {
 }
 
 const SWORD_DAMAGE = 20;
-const PLAYER_KNOCKBACK = 9;
-const ENEMY_KNOCKBACK = 14;
+const PLAYER_KNOCKBACK = 3.2;
+const ENEMY_KNOCKBACK = 5.0;
 const HIT_FLASH_DURATION = 0.12;
 const LUNGE_SPEED = 16;
 const LUNGE_DURATION = 0.22;
@@ -112,6 +115,8 @@ export class EnemyManager {
       y,
       vx: 0,
       vy: 0,
+      kbx: 0,
+      kby: 0,
       hp: archetype.maxHp,
       maxHp: archetype.maxHp,
       state: 'idle',
@@ -157,17 +162,22 @@ export class EnemyManager {
       }
 
       // Move and settle against trees / buildings / boulders.
-      enemy.x += enemy.vx * dt;
-      enemy.y += enemy.vy * dt;
+      enemy.x += (enemy.vx + enemy.kbx) * dt;
+      enemy.y += (enemy.vy + enemy.kby) * dt;
       const pos = { x: enemy.x, y: enemy.y };
       this.engine.collision.resolve(pos, archetype.radius);
       enemy.x = pos.x;
       enemy.y = pos.y;
 
-      // Friction so lunge / knockback velocities ease out instead of sliding forever.
+      // Friction so lunge / chase velocities ease out instead of sliding forever.
       const friction = Math.exp(-5 * dt);
       enemy.vx *= friction;
       enemy.vy *= friction;
+
+      // Knockback decays much faster: a tight micro-shove, not a throw.
+      const kbDecay = Math.exp(-14 * dt);
+      enemy.kbx *= kbDecay;
+      enemy.kby *= kbDecay;
 
       // Melee contact: only the stalker's lunge bites.
       if (archetype.kind === 'melee' && enemy.state === 'attack') {
@@ -332,11 +342,11 @@ export class EnemyManager {
       enemy.hitFlashTimer = HIT_FLASH_DURATION;
 
       const kd = dist || 1;
-      enemy.vx += (dx / kd) * ENEMY_KNOCKBACK;
-      enemy.vy += (dy / kd) * ENEMY_KNOCKBACK;
+      enemy.kbx += (dx / kd) * ENEMY_KNOCKBACK;
+      enemy.kby += (dy / kd) * ENEMY_KNOCKBACK;
 
       this.engine.triggerHitstop();
-      this.engine.triggerShake(0.25);
+      this.engine.triggerShake(0.12);
     }
   }
 
@@ -355,7 +365,7 @@ export class EnemyManager {
           if (this.engine.stats.takeDamage(p.damage)) {
             const kd = d || 1;
             this.engine.applyPlayerKnockback(((px - p.x) / kd) * PLAYER_KNOCKBACK, ((py - p.y) / kd) * PLAYER_KNOCKBACK);
-            this.engine.triggerShake(0.45);
+            this.engine.triggerShake(0.22);
           }
         }
       }
@@ -372,6 +382,6 @@ export class EnemyManager {
     const dy = this.engine.playerPos.y - enemy.y;
     const d = Math.hypot(dx, dy) || 1;
     this.engine.applyPlayerKnockback((dx / d) * PLAYER_KNOCKBACK, (dy / d) * PLAYER_KNOCKBACK);
-    this.engine.triggerShake(0.5);
+    this.engine.triggerShake(0.25);
   }
 }

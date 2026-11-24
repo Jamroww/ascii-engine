@@ -23,3 +23,21 @@ export const WORLD_BOUNDS = 19;
 // The player's collision radius, used to resolve overlaps with trunks, rocks
 // and boulders.
 export const PLAYER_RADIUS = 0.42;
+
+// The foreground depth-sort band. Everything that should occlude correctly
+// against its neighbours (trees, buildings, the player, enemies, the sword)
+// lives inside [Y_TO_Z_MIN, Y_TO_Z_MAX]; background layers (ground, grass,
+// shadows, water) sit below it and overlays (weather, atmosphere) sit above it.
+export const Y_TO_Z_MIN = 0.85;
+export const Y_TO_Z_MAX = 1.95;
+
+/**
+ * Map a world-space Y into the foreground depth band. Smaller Y (further
+ * south, toward the bottom of the screen) yields a HIGHER z and is therefore
+ * drawn in front, so walking north of a trunk hides the player behind it and
+ * walking south brings the player in front of it.
+ */
+export function yToZ(worldY: number): number {
+  const z = 1.4 - worldY * 0.012;
+  return z < Y_TO_Z_MIN ? Y_TO_Z_MIN : z > Y_TO_Z_MAX ? Y_TO_Z_MAX : z;
+}

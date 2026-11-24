@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { FrameContext, IRenderLayer } from '../core/types';
 import { GlyphAtlas } from './GlyphAtlas';
 import type { TerrainGrid } from '../core/TerrainGrid';
+import { yToZ } from '../core/world';
 
 export type TreeKind = 'pine' | 'oak' | 'wilted';
 
@@ -85,7 +86,7 @@ const TREE_FRAGMENT_SHADER = /* glsl */ `
 
     // Solid dark canopy/bark core so swaying grass never bleeds through trees
     if (glyphAlpha < 0.15) {
-      gl_FragColor = vec4(0.014, 0.020, 0.024, 0.96);
+      gl_FragColor = vec4(0.03, 0.04, 0.05, 0.92);
       return;
     }
 
@@ -95,9 +96,9 @@ const TREE_FRAGMENT_SHADER = /* glsl */ `
     lantern *= lantern;
 
     // Deep forest twilight ambient + warm #FF9900 lantern catch
-    vec3 ambient = vColor * vec3(0.28, 0.34, 0.40);
+    vec3 ambient = vColor * vec3(0.40, 0.48, 0.56);
     vec3 lanternTint = vec3(1.0, 0.66, 0.26);
-    vec3 lit = vColor * mix(vec3(1.0), lanternTint, 0.50) * lantern * 1.45;
+    vec3 lit = vColor * mix(vec3(1.0), lanternTint, 0.50) * lantern * 1.6;
 
     gl_FragColor = vec4(ambient + lit, 1.0);
   }
@@ -138,36 +139,37 @@ function buildTreeAsset(kind: TreeKind, rows: string[], trunkHeight: number): Tr
 
       const isTrunk = y < trunkHeight;
       const distFromCenter = Math.abs(x - (width - 1) / 2) / (width / 2);
-      // Directional crown shading: upper-left catches moonlight, lower-right falls into shadow
-      const crownShade = 0.62 + heightNorm * 0.42 + (0.5 - x / width) * 0.18 - distFromCenter * 0.15;
+
+      // 3/4 top-down light: brighter upper canopy + silhouette rim, darker base.
+      const bodyShade = 0.58 + heightNorm * 0.5;
+      const rim = Math.max(heightNorm * heightNorm, distFromCenter * 0.85);
 
       let cr: number;
       let cg: number;
       let cb: number;
 
       if (kind === 'wilted') {
-        // Pale ash-slate deadwood with subtle sickly olive/violet undertones
-        const s = 0.65 + heightNorm * 0.35;
-        cr = (char === ':' || char === ',' ? 0.26 : 0.34) * s;
-        cg = (char === ':' || char === ',' ? 0.38 : 0.33) * s;
-        cb = (char === ':' || char === ',' ? 0.32 : 0.36) * s;
+        // Pale ash-slate deadwood with a cool moonlight rim.
+        cr = 0.32 * bodyShade + rim * 0.16;
+        cg = 0.34 * bodyShade + rim * 0.18;
+        cb = 0.36 * bodyShade + rim * 0.22;
       } else if (isTrunk) {
-        // Deep shadowed bark
-        const barkShade = 0.72 + (1.0 - distFromCenter) * 0.28;
-        cr = 0.28 * barkShade;
-        cg = 0.21 * barkShade;
+        // Deep shadowed bark, catching a faint umber side light.
+        const barkShade = 0.62 + (1.0 - distFromCenter) * 0.32;
+        cr = 0.34 * barkShade;
+        cg = 0.24 * barkShade;
         cb = 0.16 * barkShade;
       } else if (kind === 'pine') {
-        // Dark boreal pine/spruce
-        cr = 0.09 * crownShade;
-        cg = 0.29 * crownShade;
-        cb = 0.21 * crownShade;
+        // Dark boreal pine: cool blue-sage rim on sunlit boughs.
+        cr = 0.1 * bodyShade + rim * 0.14;
+        cg = 0.3 * bodyShade + rim * 0.2;
+        cb = 0.22 * bodyShade + rim * 0.26;
       } else {
-        // Gnarled oak: deeper olive-moss canopy with hanging moss accents
+        // Gnarled oak: sage/umber canopy with mossy accents.
         const isMoss = char === ':' || char === ',' || char === ';';
-        cr = (isMoss ? 0.14 : 0.12) * crownShade;
-        cg = (isMoss ? 0.32 : 0.27) * crownShade;
-        cb = (isMoss ? 0.19 : 0.17) * crownShade;
+        cr = (isMoss ? 0.15 : 0.12) * bodyShade + rim * 0.2;
+        cg = (isMoss ? 0.33 : 0.28) * bodyShade + rim * 0.16;
+        cb = (isMoss ? 0.2 : 0.17) * bodyShade + rim * 0.08;
       }
 
       const swayWeight = isTrunk ? 0.0 : Math.max(0.15, (y - trunkHeight + 1) / (height - trunkHeight));
@@ -263,7 +265,7 @@ export class ForestLayer implements IRenderLayer {
   private shadowMesh!: THREE.InstancedMesh;
   private colliders: Array<{ x: number; y: number; radius: number }> = [];
 
-  constructor(atlas: GlyphAtlas, placements: TreePlacement[], cellSize = 0.34) {
+  constructor(atlas: GlyphAtlas, placements: TreePlacement[], cellSize = 0.22) {
     this.atlas = atlas;
     this.cellSize = cellSize;
     this.build(placements);
@@ -322,7 +324,7 @@ export class ForestLayer implements IRenderLayer {
         uTime: { value: 0 },
       },
       transparent: true,
-      depthWrite: false,
+      depthWrite: true,
     });
 
     this.mesh = new THREE.InstancedMesh(geometry, this.material, totalCells);
@@ -354,8 +356,9 @@ export class ForestLayer implements IRenderLayer {
       const halfW = (asset.width * size) / 2;
       const phase = (p.worldX * 0.37 + p.worldY * 0.71) % (Math.PI * 2);
 
-      // Slight Y-based Z offset within [0.85..1.12] for crisp overlapping canopies
-      const treeZ = 0.92 + Math.max(-0.07, Math.min(0.15, -p.worldY * 0.002));
+      // Unified Y-based depth: the whole tree sorts at its trunk base so the
+      // player walking north of it is occluded and walking south sits in front.
+      const treeZ = yToZ(p.worldY);
 
       this.colliders.push({
         x: p.worldX,
@@ -410,31 +413,39 @@ function seededRand(seed: number): () => number {
   };
 }
 
-/** Generates a dense, looming forest framing a large Riverside Village clearing */
+/** Generates a sparse perimeter forest ring framing a wide-open Riverside Village clearing */
 export function generateRiversideForest(terrain: TerrainGrid, seed = 42): TreePlacement[] {
   const rand = seededRand(seed);
   const placements: TreePlacement[] = [];
 
   const isBlocked = (x: number, y: number): boolean => {
     // Keep the river channel + banks clear
-    if (terrain.getRiverSDF(x, y) < 2.2) return true;
+    if (terrain.getRiverSDF(x, y) < 2.4) return true;
     // Keep the footpath, village clearing and northern trail clear
     if (terrain.getPathMask(x, y) > 0.15) return true;
     // Avoid stacking trunks directly on top of each other
     for (const p of placements) {
-      if (Math.hypot(x - p.worldX, y - p.worldY) < 3.6) return true;
+      if (Math.hypot(x - p.worldX, y - p.worldY) < 3.0) return true;
     }
     return false;
   };
 
-  // Scatter ~220 trees across a 110x110 world (heavier around the perimeter)
-  for (let i = 0; i < 900 && placements.length < 220; i++) {
-    const x = (rand() - 0.5) * 104;
-    const y = (rand() - 0.5) * 104;
+  // Confine procedural trees to an annulus around the playable area so the
+  // central village clearing, footpath and riverbank stay open. The ring sits
+  // just inside the ground's ±30 boundary, framing the scene as a natural wall.
+  const PERIMETER_MIN = 17;
+  const PERIMETER_MAX = 29;
+
+  for (let i = 0; i < 2000 && placements.length < 90; i++) {
+    // Uniform sampling over the annulus area (sqrt keeps it area-uniform).
+    const r = Math.sqrt(rand()) * (PERIMETER_MAX - PERIMETER_MIN) + PERIMETER_MIN;
+    const a = rand() * Math.PI * 2;
+    const x = Math.cos(a) * r;
+    const y = Math.sin(a) * r;
 
     if (isBlocked(x, y)) continue;
 
-    // Near the northern upstream Blight zone, mix in more wilted deadwood
+    // Near the northern upstream Blight zone, mix in more wilted deadwood.
     const roll = rand();
     let kind: TreeKind;
     if (y > 14 && roll < 0.45) {
@@ -451,7 +462,7 @@ export function generateRiversideForest(terrain: TerrainGrid, seed = 42): TreePl
       kind,
       worldX: x,
       worldY: y,
-      scale: 0.85 + rand() * 0.35,
+      scale: 1.25 + rand() * 0.5,
     });
   }
 

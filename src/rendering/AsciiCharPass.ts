@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GlyphAtlas } from './GlyphAtlas';
+import { yToZ } from '../core/world';
 
 const CHAR_VERTEX_SHADER = /* glsl */ `
   varying vec2 vUv;
@@ -14,7 +15,6 @@ const CHAR_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uAtlas;
   uniform vec2 uAtlasGrid;
   uniform vec2 uCharGrid;
-  uniform float uIsShadow;
 
   varying vec2 vUv;
 
@@ -29,13 +29,13 @@ const CHAR_FRAGMENT_SHADER = /* glsl */ `
     if (texColor.a < 0.15) discard;
 
     // 3. Map brightness (luminance) to density ramp in GlyphAtlas: .,:;-=+*#%@
+    //    Boost contrast so the traveler reads as a crisp pale silhouette.
     float lum = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
+    lum = clamp((lum - 0.40) * 1.8 + 0.40, 0.0, 1.0);
     float rampIndex = floor(clamp(lum, 0.0, 1.0) * 10.0) + 1.0;
 
-    float idx = mix(rampIndex, clamp(rampIndex + 3.0, 4.0, 11.0), uIsShadow);
-
-    float col = mod(idx, uAtlasGrid.x);
-    float row = floor(idx / uAtlasGrid.x);
+    float col = mod(rampIndex, uAtlasGrid.x);
+    float row = floor(rampIndex / uAtlasGrid.x);
 
     vec2 atlasUv = vec2(
       (col + cellUv.x) / uAtlasGrid.x,
@@ -43,15 +43,28 @@ const CHAR_FRAGMENT_SHADER = /* glsl */ `
     );
 
     float glyphAlpha = texture2D(uAtlas, atlasUv).a;
-    if (glyphAlpha < 0.15) discard;
-
-    if (uIsShadow > 0.5) {
-      gl_FragColor = vec4(0.02, 0.03, 0.04, glyphAlpha * 0.72);
-    } else {
-      // Warm rim boost so the traveler pops against the dark grass.
-      vec3 finalColor = mix(texColor.rgb * 1.15, vec3(1.0, 0.94, 0.85), lum * 0.35);
-      gl_FragColor = vec4(finalColor, glyphAlpha);
+    if (glyphAlpha < 0.15) {
+      // Opaque dark silhouette backing inside the traveler's body so ground
+      // dots and grass never bleed through the cloak.
+      gl_FragColor = vec4(0.03, 0.04, 0.05, 0.92);
+      return;
     }
+
+    // Warm pale cloak with a bright rim so the traveler is unmistakable at
+    // the finer zoomed-out scale.
+    vec3 finalColor = mix(texColor.rgb * 1.5, vec3(1.0, 0.94, 0.84), clamp(lum * 0.85, 0.0, 1.0));
+    gl_FragColor = vec4(finalColor, 1.0);
+  }
+`;
+
+const SHADOW_FRAGMENT_SHADER = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vec2 c = (vUv - 0.5) * 2.0;
+    float d = length(c);
+    if (d > 1.0) discard;
+    float a = smoothstep(1.0, 0.1, d) * 0.5;
+    gl_FragColor = vec4(0.01, 0.015, 0.02, a);
   }
 `;
 
@@ -74,8 +87,12 @@ export class AsciiCharPass {
   private readonly lanternLight: THREE.PointLight;
 
   private readonly charMaterial: THREE.ShaderMaterial;
-  private readonly shadowMaterial: THREE.ShaderMaterial;
+  private readonly groundShadowMaterial: THREE.ShaderMaterial;
   private readonly toDispose: Array<{ dispose(): void }> = [];
+
+  private readonly charMesh: THREE.Mesh;
+  private readonly shadowMesh: THREE.Mesh;
+  private attachedModel: THREE.Object3D | null = null;
 
   private walkPhase = 0;
   private facingAngle = 0;
@@ -220,38 +237,36 @@ export class AsciiCharPass {
 
     this.offscreenScene.add(this.charRig);
 
-    // 4. Main-scene ASCII billboard + fake shadow.
+    // 4. Main-scene ASCII billboard + a clean oval grounding shadow.
     const sharedUniforms = {
       uCharTex: { value: this.renderTarget.texture },
       uAtlas: { value: atlas.texture },
       uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
-      uCharGrid: { value: new THREE.Vector2(18, 22) },
+      uCharGrid: { value: new THREE.Vector2(24, 28) },
     };
 
     this.charMaterial = new THREE.ShaderMaterial({
       vertexShader: CHAR_VERTEX_SHADER,
       fragmentShader: CHAR_FRAGMENT_SHADER,
-      uniforms: { ...sharedUniforms, uIsShadow: { value: 0.0 } },
+      uniforms: { ...sharedUniforms },
       transparent: true,
-      depthWrite: false,
+      depthWrite: true,
     });
 
-    this.shadowMaterial = new THREE.ShaderMaterial({
+    this.groundShadowMaterial = new THREE.ShaderMaterial({
       vertexShader: CHAR_VERTEX_SHADER,
-      fragmentShader: CHAR_FRAGMENT_SHADER,
-      uniforms: { ...sharedUniforms, uIsShadow: { value: 1.0 } },
+      fragmentShader: SHADOW_FRAGMENT_SHADER,
       transparent: true,
       depthWrite: false,
     });
 
-    const charMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 3.0), this.charMaterial);
-    charMesh.position.set(0, 0.9, 1.2);
+    this.charMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.7, 3.1), this.charMaterial);
+    this.charMesh.position.set(0, 0.9, yToZ(0));
 
-    const shadowMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 3.0), this.shadowMaterial);
-    shadowMesh.scale.set(1.05, 0.38, 1);
-    shadowMesh.position.set(0.15, -0.35, 0.6);
+    this.shadowMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.55), this.groundShadowMaterial);
+    this.shadowMesh.position.set(0.05, -0.55, 0.53);
 
-    this.group.add(shadowMesh, charMesh);
+    this.group.add(this.shadowMesh, this.charMesh);
   }
 
   public update(
@@ -266,6 +281,10 @@ export class AsciiCharPass {
     worldY: number
   ): void {
     this.group.position.set(worldX, worldY, 0);
+
+    // Unified Y-based depth: the billboard sorts with trees/buildings/enemies.
+    this.charMesh.position.z = yToZ(worldY);
+    this.shadowMesh.position.z = 0.53;
 
     const speed = Math.hypot(moveX, moveY);
     const sink = wading ? -0.24 : 0;
@@ -332,10 +351,23 @@ export class AsciiCharPass {
     return this.portraitPixels;
   }
 
+  /**
+   * Swap the procedural cloaked-traveler rig for an external 3D model (e.g. a
+   * `.glb` loaded via GLTFLoader) inside the offscreen ASCII render target.
+   * The ASCII shader and billboard stay untouched — only what the offscreen
+   * camera renders changes.
+   */
+  public attachModel(object: THREE.Object3D): void {
+    if (this.attachedModel) this.offscreenScene.remove(this.attachedModel);
+    this.offscreenScene.remove(this.charRig);
+    this.attachedModel = object;
+    this.offscreenScene.add(object);
+  }
+
   public dispose(): void {
     this.renderTarget.dispose();
     this.charMaterial.dispose();
-    this.shadowMaterial.dispose();
+    this.groundShadowMaterial.dispose();
     this.lanternCoreMat.dispose();
     for (const item of this.toDispose) item.dispose();
   }

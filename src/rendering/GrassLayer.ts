@@ -84,15 +84,17 @@ const GRASS_FRAGMENT_SHADER = /* glsl */ `
     float dist = distance(vWorldPos, uPlayerPos);
     float torchLight = smoothstep(11.0 * flicker, 0.5, dist);
 
-    // Subtle tip highlight so dense grass reads with depth
-    float tipGlow = mix(0.75, 1.2, vUv.y);
+    // Gentle tip highlight so dense grass reads with depth (not bright streaks)
+    float tipGlow = mix(0.8, 1.02, vUv.y);
 
-    vec3 ambient = vColor * 0.30 * tipGlow;
-    vec3 torchTint = vec3(1.0, 0.78, 0.50);
-    vec3 lit = vColor * mix(vec3(1.0), torchTint, 0.45) * torchLight * 1.35 * tipGlow;
+    vec3 ambient = vColor * 0.23 * tipGlow;
+    vec3 torchTint = vec3(1.0, 0.72, 0.46);
+    vec3 lit = vColor * mix(vec3(1.0), torchTint, 0.42) * torchLight * 1.05 * tipGlow;
 
-    // Slightly darken grass crushed directly under the player
-    float shadow = 1.0 - vBend * 0.35;
+    // Dark radial depression under the player's feet so the traveler pops.
+    float footDist = distance(vWorldPos, uPlayerPos);
+    float depression = smoothstep(1.8, 0.15, footDist) * 0.45;
+    float shadow = (1.0 - vBend * 0.3) * (1.0 - depression);
 
     gl_FragColor = vec4((ambient + lit) * shadow, alpha);
   }
@@ -106,15 +108,14 @@ export class GrassLayer implements IRenderLayer {
     return this.mesh;
   }
 
-  constructor(atlas: GlyphAtlas, terrain: TerrainGrid, count = 18000, areaSize = 55) {
-    const geometry = new THREE.PlaneGeometry(0.55, 0.65);
+  constructor(atlas: GlyphAtlas, terrain: TerrainGrid, count = 26000, areaSize = 55) {
+    const geometry = new THREE.PlaneGeometry(0.46, 0.55);
 
     const glyphIndices = new Float32Array(count);
     const colors = new Float32Array(count * 3);
     const phases = new Float32Array(count);
 
     const bladeChars = ['/', '|', '\\', '|', '/'];
-    const flowerChars = ['o', '.', '*'];
 
     const dummy = new THREE.Object3D();
     this.material = new THREE.ShaderMaterial({
@@ -142,8 +143,8 @@ export class GrassLayer implements IRenderLayer {
       const onPath = terrain.getPathMask(x, y) > 0.6;
       if (onPath && Math.random() < 0.8) continue;
 
-      // Slight Z jitter so overlapping blades don't z-fight
-      const z = 0.2 + Math.random() * 0.3;
+      // Slight Z jitter so overlapping blades don't z-fight (0.2..0.45)
+      const z = 0.2 + Math.random() * 0.25;
 
       const scale = 0.8 + Math.random() * 0.5;
       dummy.position.set(x, y, z);
@@ -154,27 +155,21 @@ export class GrassLayer implements IRenderLayer {
       phases[i] = Math.random() * Math.PI * 2;
 
       const roll = Math.random();
-      if (roll < 0.035) {
-        // Tiny pale wildflowers / dew specks (like in the Insta screenshots)
-        const char = flowerChars[Math.floor(Math.random() * flowerChars.length)];
-        glyphIndices[i] = atlas.getIndex(char);
-        colors[i * 3 + 0] = 0.85;
-        colors[i * 3 + 1] = 0.92;
-        colors[i * 3 + 2] = 0.85;
-      } else if (roll < 0.045) {
-        // Rare muted red/orange petal accent
-        glyphIndices[i] = atlas.getIndex('o');
-        colors[i * 3 + 0] = 0.78;
-        colors[i * 3 + 1] = 0.28;
-        colors[i * 3 + 2] = 0.18;
+      if (roll < 0.02) {
+        // Rare muted sage accent (young shoot / dew) so the field stays one
+        // cohesive deep-forest green with no bright confetti to fight the player.
+        glyphIndices[i] = atlas.getIndex('.');
+        colors[i * 3 + 0] = 0.26;
+        colors[i * 3 + 1] = 0.4;
+        colors[i * 3 + 2] = 0.28;
       } else {
-        // Lush, varied dark emerald / forest green blades
+        // Lush, layered deeper forest-green blades.
         const char = bladeChars[Math.floor(Math.random() * bladeChars.length)];
         glyphIndices[i] = atlas.getIndex(char);
-        const shade = 0.6 + Math.random() * 0.55;
-        colors[i * 3 + 0] = 0.12 * shade;
-        colors[i * 3 + 1] = 0.52 * shade;
-        colors[i * 3 + 2] = 0.28 * shade;
+        const shade = 0.4 + Math.random() * 0.45;
+        colors[i * 3 + 0] = 0.08 * shade;
+        colors[i * 3 + 1] = 0.32 * shade;
+        colors[i * 3 + 2] = 0.17 * shade;
       }
 
       i++;

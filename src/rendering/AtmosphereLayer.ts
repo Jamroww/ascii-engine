@@ -14,6 +14,9 @@ const ATMOSPHERE_FRAGMENT_SHADER = /* glsl */ `
   uniform vec2 uPlayerPos;
   uniform vec2 uViewSize;
   uniform float uTime;
+  uniform float uLanternRadius;
+  uniform float uFogNear;
+  uniform float uFogFar;
 
   varying vec2 vWorldPos;
 
@@ -22,27 +25,32 @@ const ATMOSPHERE_FRAGMENT_SHADER = /* glsl */ `
   }
 
   void main() {
-    // 1. Gentle radial falloff: a soft circle of clarity around the player.
     float dist = distance(vWorldPos, uPlayerPos);
-    float pool = smoothstep(14.0, 6.0, dist) * 0.32;
 
-    // 2. Far fade that swallows the treeline and hides the ground's edge.
-    float fog = smoothstep(19.0, 34.0, dist);
+    // Warm radial lantern pool centred on the player, breathing gently.
+    float radius = uLanternRadius + sin(uTime * 1.3) * 0.6;
+    float lantern = 1.0 - smoothstep(0.0, radius, dist);
+    float warmGlow = lantern * lantern;
 
-    // 3. Screen-space vignette that darkens the corners of the viewport.
+    // Outer fog: moody cool-slate darkness creeping in past the lantern pool.
+    float fog = smoothstep(uFogNear, uFogFar, dist);
+
+    // Softened screen-space vignette for the viewport corners.
     vec2 rel = (vWorldPos - uPlayerPos) / uViewSize;
     float edge = max(abs(rel.x), abs(rel.y));
-    float corner = smoothstep(0.30, 0.52, edge) * 0.9;
+    float corner = smoothstep(0.38, 0.62, edge);
 
-    float alpha = clamp(max(pool + fog, corner), 0.0, 0.88);
+    // The lantern clears darkness near the player; keep the outer fade gentle.
+    float dark = clamp(max(fog, corner) * (1.0 - lantern * 0.55), 0.0, 0.8);
 
-    // Gentle dithering so the gradient keeps the coarse, printed feel.
-    float dither = hash(gl_FragCoord.xy) * 0.04 - 0.02;
-    alpha = clamp(alpha + dither, 0.0, 0.9);
+    // Cool slate in the dark, warmed by a faint amber wash under the lantern.
+    vec3 color = vec3(0.022, 0.042, 0.068);
+    color += vec3(1.0, 0.50, 0.18) * warmGlow * 0.18;
 
-    // Faint blue-green darkness rather than pure black, to match the moss palette.
-    vec3 fogColor = vec3(0.014, 0.021, 0.028);
-    gl_FragColor = vec4(fogColor, alpha);
+    float dither = hash(gl_FragCoord.xy) * 0.03 - 0.015;
+    float alpha = clamp(dark + dither + warmGlow * 0.05, 0.0, 0.84);
+
+    gl_FragColor = vec4(color, alpha);
   }
 `;
 
@@ -58,6 +66,9 @@ export class AtmosphereLayer implements IRenderLayer {
         uPlayerPos: { value: new THREE.Vector2(0, 0) },
         uViewSize: { value: new THREE.Vector2(20, 20) },
         uTime: { value: 0 },
+        uLanternRadius: { value: 10.0 },
+        uFogNear: { value: 11.0 },
+        uFogFar: { value: 30.0 },
       },
       transparent: true,
       depthWrite: false,
@@ -72,6 +83,11 @@ export class AtmosphereLayer implements IRenderLayer {
 
   public setViewport(worldWidth: number, worldHeight: number): void {
     this.material.uniforms.uViewSize.value.set(worldWidth, worldHeight);
+    // Scale the lantern pool and fog with the view so the clearing stays open
+    // and legible at the finer zoomed-out scale instead of a cramped circle.
+    this.material.uniforms.uLanternRadius.value = worldHeight * 0.5;
+    this.material.uniforms.uFogNear.value = worldHeight * 0.55;
+    this.material.uniforms.uFogFar.value = worldHeight * 1.5;
   }
 
   public update(ctx: FrameContext): void {

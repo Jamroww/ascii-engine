@@ -50,19 +50,52 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
     float alpha = texture2D(uAtlas, atlasUv).a;
     if (alpha < 0.1) discard;
 
-    // Subtle torch flicker & radial light falloff around the player
+    // Readable mossy-slate ambient with a warm lantern pool near the player.
     float flicker = 1.0 + sin(uTime * 7.0) * 0.03 + sin(uTime * 13.0) * 0.02;
     float dist = distance(vWorldPos, uPlayerPos);
-    float torchLight = smoothstep(10.0 * flicker, 0.5, dist);
+    float torchLight = smoothstep(11.0 * flicker, 1.0, dist);
 
-    // Dark moody ambient + warm orange torch tint near the player
-    vec3 ambient = vColor * 0.22;
-    vec3 torchTint = vec3(1.0, 0.72, 0.42);
-    vec3 lit = vColor * mix(vec3(1.0), torchTint, 0.55) * torchLight * 1.4;
+    vec3 ambient = vColor * 0.36;
+    vec3 torchTint = vec3(1.0, 0.70, 0.40);
+    vec3 lit = vColor * mix(vec3(1.0), torchTint, 0.42) * torchLight * 0.85;
 
     gl_FragColor = vec4(ambient + lit, alpha);
   }
 `;
+
+// --- Procedural value-noise helpers for topographic contour shading ----------
+
+function valueNoise(x: number, y: number, seed: number): number {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const fx = x - ix;
+  const fy = y - iy;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+
+  const hash2 = (px: number, py: number): number => {
+    const n = Math.sin(px * 127.1 + py * 311.7 + seed * 74.3) * 43758.5453123;
+    return n - Math.floor(n);
+  };
+
+  const a = hash2(ix, iy);
+  const b = hash2(ix + 1, iy);
+  const c = hash2(ix, iy + 1);
+  const d = hash2(ix + 1, iy + 1);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+
+function fbm(x: number, y: number, seed: number, octaves = 3): number {
+  let v = 0;
+  let amp = 0.5;
+  let freq = 1;
+  for (let o = 0; o < octaves; o++) {
+    v += amp * valueNoise(x * freq, y * freq, seed + o * 17.31);
+    freq *= 2.0;
+    amp *= 0.5;
+  }
+  return v;
+}
 
 export class GroundLayer implements IRenderLayer {
   public readonly mesh: THREE.InstancedMesh;
@@ -72,7 +105,7 @@ export class GroundLayer implements IRenderLayer {
     return this.mesh;
   }
 
-  constructor(atlas: GlyphAtlas, terrain: TerrainGrid, width = 100, height = 100, cellSize = 0.6) {
+  constructor(atlas: GlyphAtlas, terrain: TerrainGrid, width = 172, height = 172, cellSize = 0.35) {
     const count = width * height;
     const geometry = new THREE.PlaneGeometry(cellSize, cellSize);
 
@@ -84,17 +117,16 @@ export class GroundLayer implements IRenderLayer {
     const halfW = (width * cellSize) / 2;
     const halfH = (height * cellSize) / 2;
 
+    // Contour glyphs: topographic bands (no middle-dot, which is outside the atlas).
+    const contourChars = ['-', '~', ':', '.', ','];
+    const mossChars = ['.', '.', ',', ':', "'", '`'];
+    const dirtChars = [':', '.', ',', ';', '.', '.'];
+    const rimChars = ['.', '.', ':', ',', "'"];
+    const bankChars = ['~', ':', '.', ':', ','];
+
     let i = 0;
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
-        // Position each glyph cell in world space
-        dummy.position.set(
-          x * cellSize - halfW,
-          y * cellSize - halfH,
-          0
-        );
-        dummy.updateMatrix();
-
         // World-space centre of this glyph cell.
         const wx = x * cellSize - halfW + cellSize / 2;
         const wy = y * cellSize - halfH + cellSize / 2;
@@ -103,40 +135,55 @@ export class GroundLayer implements IRenderLayer {
         const hash = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
         const rand = hash - Math.floor(hash);
 
-        // A winding dirt footpath leading from spawn toward the river.
-        const onPath = terrain.getPathMask(wx, wy) > 0.6;
+        const pathMask = terrain.getPathMask(wx, wy);
+        const riverSdf = terrain.getRiverSDF(wx, wy);
+        const elevation = fbm(wx * 0.38 + 5.2, wy * 0.38 - 3.7, 13);
 
         let char: string;
         let r: number;
         let g: number;
         let b: number;
 
-        if (onPath) {
-          // Packed earth, subtly varying.
-          const dirtChars = [':', '.', ',', ';', '.'];
+        if (riverSdf > 0 && riverSdf < 1.7) {
+          // Muted silty shoreline foam/contour rim right at the water's edge.
+          char = bankChars[Math.floor(rand * bankChars.length)];
+          const shade = 0.6 + rand * 0.25;
+          r = 0.38 * shade;
+          g = 0.44 * shade;
+          b = 0.46 * shade;
+        } else if (pathMask > 0.9) {
+          // Warm damp packed earth on the footpath.
           char = dirtChars[Math.floor(rand * dirtChars.length)];
-          const shade = 0.6 + rand * 0.4;
-          r = 0.3 * shade;
-          g = 0.23 * shade;
-          b = 0.14 * shade;
-        } else if (rand < 0.022) {
-          // Scattered fallen leaves in muted red / amber.
-          const leafRand = Math.sin(x * 91.7 + y * 31.3) * 43758.5453;
-          const leaf = leafRand - Math.floor(leafRand);
-          char = leaf < 0.5 ? '.' : ',';
-          const warm = 0.5 + leaf * 0.5;
-          r = 0.34 + warm * 0.22;
-          g = 0.2 + warm * 0.1;
-          b = 0.12 + warm * 0.06;
+          const shade = 0.62 + rand * 0.38;
+          r = 0.44 * shade;
+          g = 0.3 * shade;
+          b = 0.17 * shade;
+        } else if (pathMask > 0.6) {
+          // Drier, lighter highlight rim along the footpath edge.
+          char = rimChars[Math.floor(rand * rimChars.length)];
+          const shade = 0.64 + rand * 0.36;
+          r = 0.52 * shade;
+          g = 0.38 * shade;
+          b = 0.22 * shade;
         } else {
-          // Muted dark moss / forest floor with coarse low-frequency patches.
-          const mossChars = ['.', '.', ',', ':', ';', "'", '`', ' '];
-          char = mossChars[Math.floor(rand * mossChars.length)];
-          const coarse = 0.85 + Math.sin(wx * 1.7 + wy * 2.3) * 0.15;
-          const shade = (0.6 + rand * 0.4) * coarse;
-          r = 0.13 * shade;
-          g = 0.35 * shade;
-          b = 0.21 * shade;
+          // Dark mossy slate forest floor with layered topographic contour bands.
+          const bands = 5;
+          const bandPos = elevation * bands;
+          const band = Math.floor(bandPos);
+          const frac = bandPos - band;
+          const isContour = frac < 0.12;
+
+          if (isContour) {
+            char = contourChars[band % contourChars.length];
+          } else {
+            char = mossChars[Math.floor(rand * mossChars.length)];
+          }
+
+          // Brighter on ridges, deeper in hollows, subtle rim on contour lines.
+          const shade = 0.66 + elevation * 0.5 + (isContour ? 0.16 : 0.0);
+          r = 0.16 * shade;
+          g = 0.32 * shade;
+          b = 0.27 * shade;
         }
 
         glyphIndices[i] = atlas.getIndex(char);

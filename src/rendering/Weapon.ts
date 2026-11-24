@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GlyphAtlas } from './GlyphAtlas';
 import type { AsciiPropAsset, AsciiPropCell } from '../core/types';
+import { yToZ } from '../core/world';
 
 const WEAPON_VERTEX_SHADER = /* glsl */ `
   attribute float aGlyphIndex;
@@ -38,10 +39,14 @@ const WEAPON_FRAGMENT_SHADER = /* glsl */ `
     );
 
     float alpha = texture2D(uAtlas, atlasUv).a;
-    if (alpha < 0.15) discard;
+    if (alpha < 0.15) {
+      // Dark silhouette backing so the blade reads crisply over grass/trees.
+      gl_FragColor = vec4(0.03, 0.04, 0.05, 0.92);
+      return;
+    }
 
     // Always fully lit so the blade reads clearly against the dark ground.
-    gl_FragColor = vec4(vColor * 1.35, alpha);
+    gl_FragColor = vec4(vColor * 1.4, 1.0);
   }
 `;
 
@@ -139,7 +144,7 @@ export class Weapon {
         uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
       },
       transparent: true,
-      depthWrite: false,
+      depthWrite: true,
     });
 
     this.mesh = new THREE.InstancedMesh(geometry, this.material, cells.length);
@@ -187,7 +192,14 @@ export class Weapon {
     }
 
     // The hilt rides just ahead of the traveler, so the blade reaches outward.
-    this.object3D.position.set(worldX + dirX * 0.4, worldY + dirY * 0.4, 1.3);
+    // Sort with the player: a hair in front, or slightly behind when aiming
+    // north so the up-swing never floats above the canopy.
+    const aimNorth = dirY > 0;
+    this.object3D.position.set(
+      worldX + dirX * 0.4,
+      worldY + dirY * 0.4,
+      yToZ(worldY) + (aimNorth ? -0.015 : 0.015)
+    );
   }
 
   public swing(): void {

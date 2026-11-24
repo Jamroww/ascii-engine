@@ -107,8 +107,8 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     // 1. Clip to river channel
     if (edgeDist > 0.0) discard;
 
-    // Deep obsidian river bed behind glyphs
-    vec3 bedColor = vec3(0.015, 0.025, 0.042);
+    // Deep cool-teal river bed behind glyphs (readable even outside the lantern)
+    vec3 bedColor = vec3(0.05, 0.09, 0.13);
 
     // 2. Three faceted boulders with downstream wakes
     vec2 rock1 = vec2(6.8, -4.0);
@@ -157,7 +157,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
       rockWake(cellWorld, rock1, 1.15),
       max(rockWake(cellWorld, rock2, 0.95), rockWake(cellWorld, rock3, 1.30))
     );
-    float bankFoam = smoothstep(-0.95, 0.0, edgeDist);
+    float bankFoam = smoothstep(-1.5, 0.0, edgeDist);
 
     // Expanding ripple rings when the player is near or wading in the river
     float playerDist = distance(cellWorld, uPlayerPos);
@@ -165,7 +165,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     float wadeWake = smoothstep(3.2, 0.3, playerDist) * wadeRing * 0.55;
 
     float energy = clamp(
-      ribbon * 0.58 + microRipple * 0.28 + bankFoam * 0.42 + wake * 0.72 + wadeWake,
+      ribbon * 0.68 + microRipple * 0.3 + bankFoam * 0.75 + wake * 0.72 + wadeWake,
       0.0,
       1.0
     );
@@ -191,7 +191,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     }
 
     // Keep calm deep water dark and quiet unless a reflection or Blight artifact hits it
-    float visibleThreshold = 0.36 - lanternRef * 0.18 - extraRefStrength * 0.18 - blightMask * 0.20;
+    float visibleThreshold = 0.24 - lanternRef * 0.18 - extraRefStrength * 0.18 - blightMask * 0.20;
     if (energy < visibleThreshold) {
       vec3 mirrorGlow = vec3(0.18, 0.10, 0.04) * lanternRef * 0.45 + extraRefColor * 0.25;
       gl_FragColor = vec4(bedColor + mirrorGlow, 0.94);
@@ -226,8 +226,8 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     }
 
     // 7. Color: dark slate-blue -> crisp pale foam -> warm #FF9900 reflection / Blight corruption
-    vec3 deepWater = vec3(0.14, 0.24, 0.34);
-    vec3 foamColor = vec3(0.68, 0.78, 0.86);
+    vec3 deepWater = vec3(0.16, 0.28, 0.38);
+    vec3 foamColor = vec3(0.78, 0.86, 0.92);
     vec3 waterColor = mix(deepWater, foamColor, smoothstep(0.50, 0.92, energy));
 
     // Apply warm #FF9900 lantern reflection (suppressed where Blight turns water into static)
@@ -245,7 +245,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
       waterColor = mix(waterColor, vec3(0.18, 0.42, 0.28), blightMask * 0.55);
     }
 
-    float brightness = 0.48 + lanternRef * 0.75 + extraRefStrength * 0.65 + (isBlightGlyph ? 0.45 : 0.0);
+    float brightness = 0.62 + lanternRef * 0.6 + extraRefStrength * 0.55 + (isBlightGlyph ? 0.45 : 0.0);
     gl_FragColor = vec4(waterColor * brightness, 1.0);
   }
 `;

@@ -113,16 +113,16 @@ export class WeatherLayer implements IRenderLayer {
         types[i] = 1.0;
         speeds[i] = 1.0;
         glyphIndices[i] = sporeIdx;
-        colors[i * 3 + 0] = 0.95;
-        colors[i * 3 + 1] = 0.85;
-        colors[i * 3 + 2] = 0.45;
+        colors[i * 3 + 0] = 0.5;
+        colors[i * 3 + 1] = 0.6;
+        colors[i * 3 + 2] = 0.3;
       } else {
         types[i] = 2.0;
         speeds[i] = 0.6 + Math.random() * 0.8;
         glyphIndices[i] = petalIdx;
-        colors[i * 3 + 0] = 0.72;
-        colors[i * 3 + 1] = 0.34;
-        colors[i * 3 + 2] = 0.38;
+        colors[i * 3 + 0] = 0.5;
+        colors[i * 3 + 1] = 0.28;
+        colors[i * 3 + 2] = 0.26;
       }
     }
 
