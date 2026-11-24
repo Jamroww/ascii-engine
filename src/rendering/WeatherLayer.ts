@@ -7,7 +7,7 @@ const WEATHER_VERTEX_SHADER = /* glsl */ `
   attribute float aSpeed;
   attribute float aGlyphIndex;
   attribute vec3 aColor;
-  attribute float aType; // 0.0 = rain, 1.0 = drifting spore/firefly
+  attribute float aType; // 0.0 = rain, 1.0 = firefly/spore, 2.0 = falling petal
 
   uniform float uTime;
   uniform vec2 uPlayerPos;
@@ -26,18 +26,23 @@ const WEATHER_VERTEX_SHADER = /* glsl */ `
     vec2 pos = aOffset.xy;
 
     if (aType < 0.5) {
-      // Diagonal falling rain
+      // Diagonal falling rain.
       pos.x -= uTime * aSpeed * 0.35;
       pos.y -= uTime * aSpeed;
       vAlpha = 0.55;
-    } else {
-      // Slow drifting fireflies / spores
+    } else if (aType < 1.5) {
+      // Slow drifting fireflies / spores.
       pos.x += sin(uTime * 0.8 + aOffset.z * 6.28) * 1.4;
       pos.y += cos(uTime * 0.6 + aOffset.z * 6.28) * 1.1;
       vAlpha = 0.35 + 0.65 * (0.5 + 0.5 * sin(uTime * 3.0 + aOffset.z * 12.0));
+    } else {
+      // Wilted petals: flutter down with a side-to-side sway.
+      pos.y -= uTime * aSpeed * 0.22;
+      pos.x += sin(uTime * 1.2 + aOffset.z * 6.28) * 1.8;
+      vAlpha = 0.85;
     }
 
-    // Wrap particles seamlessly around the player so weather is infinite
+    // Wrap particles seamlessly around the player so weather is infinite.
     vec2 rel = mod(pos - uPlayerPos + uBounds * 0.5, uBounds) - uBounds * 0.5;
     vec3 worldCenter = vec3(uPlayerPos + rel, 2.5);
 
@@ -76,8 +81,8 @@ export class WeatherLayer implements IRenderLayer {
   public readonly object3D: THREE.InstancedMesh;
   private readonly material: THREE.ShaderMaterial;
 
-  constructor(atlas: GlyphAtlas, rainCount = 450, sporeCount = 80) {
-    const total = rainCount + sporeCount;
+  constructor(atlas: GlyphAtlas, rainCount = 360, sporeCount = 80, petalCount = 40) {
+    const total = rainCount + sporeCount + petalCount;
     const boundsX = 42;
     const boundsY = 26;
 
@@ -90,6 +95,7 @@ export class WeatherLayer implements IRenderLayer {
 
     const rainIdx = atlas.getIndex('/');
     const sporeIdx = atlas.getIndex('.');
+    const petalIdx = atlas.getIndex('*');
 
     for (let i = 0; i < total; i++) {
       offsets[i * 3 + 0] = (Math.random() - 0.5) * boundsX;
@@ -103,13 +109,20 @@ export class WeatherLayer implements IRenderLayer {
         colors[i * 3 + 0] = 0.55;
         colors[i * 3 + 1] = 0.68;
         colors[i * 3 + 2] = 0.82;
-      } else {
+      } else if (i < rainCount + sporeCount) {
         types[i] = 1.0;
         speeds[i] = 1.0;
         glyphIndices[i] = sporeIdx;
         colors[i * 3 + 0] = 0.95;
         colors[i * 3 + 1] = 0.85;
         colors[i * 3 + 2] = 0.45;
+      } else {
+        types[i] = 2.0;
+        speeds[i] = 0.6 + Math.random() * 0.8;
+        glyphIndices[i] = petalIdx;
+        colors[i * 3 + 0] = 0.72;
+        colors[i * 3 + 1] = 0.34;
+        colors[i * 3 + 2] = 0.38;
       }
     }
 

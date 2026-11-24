@@ -1,0 +1,140 @@
+import * as THREE from 'three';
+import { GlyphAtlas } from './GlyphAtlas';
+import { createSword } from './propAssets';
+
+const WEAPON_VERTEX_SHADER = /* glsl */ `
+  attribute float aGlyphIndex;
+  attribute vec3 aColor;
+
+  varying vec2 vUv;
+  varying float vGlyphIndex;
+  varying vec3 vColor;
+
+  void main() {
+    vUv = uv;
+    vGlyphIndex = aGlyphIndex;
+    vColor = aColor;
+    vec4 worldPosition = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+  }
+`;
+
+const WEAPON_FRAGMENT_SHADER = /* glsl */ `
+  uniform sampler2D uAtlas;
+  uniform vec2 uAtlasGrid;
+
+  varying vec2 vUv;
+  varying float vGlyphIndex;
+  varying vec3 vColor;
+
+  void main() {
+    float idx = floor(vGlyphIndex + 0.5);
+    float col = mod(idx, uAtlasGrid.x);
+    float row = floor(idx / uAtlasGrid.x);
+
+    vec2 atlasUv = vec2(
+      (col + vUv.x) / uAtlasGrid.x,
+      1.0 - ((row + 1.0 - vUv.y) / uAtlasGrid.y)
+    );
+
+    float alpha = texture2D(uAtlas, atlasUv).a;
+    if (alpha < 0.15) discard;
+
+    // Always fully lit so the blade reads clearly against the dark ground.
+    gl_FragColor = vec4(vColor * 1.35, alpha);
+  }
+`;
+
+export class Weapon {
+  public readonly object3D = new THREE.Group();
+
+  private readonly mesh: THREE.InstancedMesh;
+  private readonly material: THREE.ShaderMaterial;
+
+  private angle = 0;
+  private swinging = false;
+  private swingT = 0;
+  private readonly swingDuration = 0.22;
+
+  constructor(atlas: GlyphAtlas) {
+    const sword = createSword();
+    const size = 0.16;
+    const cells = sword.cells;
+    const pivotX = (sword.width - 1) / 2; // blade is centred horizontally
+    const pivotY = 0; // hilt sits at the local origin
+
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const glyphIndices = new Float32Array(cells.length);
+    const colors = new Float32Array(cells.length * 3);
+
+    this.material = new THREE.ShaderMaterial({
+      vertexShader: WEAPON_VERTEX_SHADER,
+      fragmentShader: WEAPON_FRAGMENT_SHADER,
+      uniforms: {
+        uAtlas: { value: atlas.texture },
+        uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
+      },
+      transparent: true,
+      depthWrite: false,
+    });
+
+    this.mesh = new THREE.InstancedMesh(geometry, this.material, cells.length);
+    const dummy = new THREE.Object3D();
+
+    for (let i = 0; i < cells.length; i++) {
+      const cell = cells[i];
+      dummy.position.set((cell.x - pivotX) * size, (cell.y - pivotY) * size, 0);
+      dummy.scale.set(size, size, 1);
+      dummy.updateMatrix();
+      this.mesh.setMatrixAt(i, dummy.matrix);
+
+      glyphIndices[i] = atlas.getIndex(cell.char);
+      colors[i * 3 + 0] = cell.r;
+      colors[i * 3 + 1] = cell.g;
+      colors[i * 3 + 2] = cell.b;
+    }
+
+    geometry.setAttribute('aGlyphIndex', new THREE.InstancedBufferAttribute(glyphIndices, 1));
+    geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(colors, 3));
+    this.mesh.instanceMatrix.needsUpdate = true;
+
+    this.object3D.add(this.mesh);
+  }
+
+  public update(dt: number, aimX: number, aimY: number, worldX: number, worldY: number): void {
+    let dirX = aimX;
+    let dirY = aimY;
+    const len = Math.hypot(dirX, dirY);
+    if (len > 0.001) {
+      dirX /= len;
+      dirY /= len;
+      this.angle = Math.atan2(dirX, dirY);
+    }
+
+    if (this.swinging) {
+      this.swingT += dt;
+      const p = Math.min(1, this.swingT / this.swingDuration);
+      const ease = p * (2 - p); // ease-out
+      const sweep = -1.2 + 2.4 * ease;
+      this.object3D.rotation.z = this.angle + sweep;
+      if (p >= 1) this.swinging = false;
+    } else {
+      this.object3D.rotation.z = this.angle;
+    }
+
+    // The hilt rides just ahead of the traveler, so the blade reaches outward.
+    this.object3D.position.set(worldX + dirX * 0.4, worldY + dirY * 0.4, 1.3);
+  }
+
+  public swing(): void {
+    if (!this.swinging) {
+      this.swinging = true;
+      this.swingT = 0;
+    }
+  }
+
+  public dispose(): void {
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+  }
+}

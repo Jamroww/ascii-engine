@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { FrameContext, IRenderLayer } from '../core/types';
+import type { CircleCollider, FrameContext, IRenderLayer } from '../core/types';
 import { GlyphAtlas } from './GlyphAtlas';
 
 export interface AsciiPropCell {
@@ -23,6 +23,11 @@ export interface PropPlacement {
   worldX: number;
   worldY: number;
   cellSize?: number;
+  /** Solid collision radius in world units (trunk / rock body). */
+  colliderRadius?: number;
+  /** Optional absolute-world override for the collider centre (e.g. an off-centre stem). */
+  colliderX?: number;
+  colliderY?: number;
 }
 
 const PROP_VERTEX_SHADER = /* glsl */ `
@@ -85,8 +90,10 @@ const PROP_FRAGMENT_SHADER = /* glsl */ `
 export class PropLayer implements IRenderLayer {
   public readonly object3D: THREE.InstancedMesh;
   private readonly material: THREE.ShaderMaterial;
+  private readonly placements: PropPlacement[];
 
   constructor(atlas: GlyphAtlas, placements: PropPlacement[]) {
+    this.placements = placements;
     const totalCells = placements.reduce((sum, p) => sum + p.asset.cells.length, 0);
     const geometry = new THREE.PlaneGeometry(1, 1);
 
@@ -142,48 +149,24 @@ export class PropLayer implements IRenderLayer {
     this.material.uniforms.uTime.value = ctx.elapsed;
   }
 
+  /** Solid circle colliders, one per placement (centred near the trunk/body). */
+  public getColliders(): CircleCollider[] {
+    const colliders: CircleCollider[] = [];
+    for (const p of this.placements) {
+      const size = p.cellSize ?? 0.42;
+      // Cell placement is offset by width*size/2, so the visual centre of the
+      // asset sits at worldX - size/2 (the trunk for tree sprites).
+      const cx = p.colliderX ?? p.worldX - size / 2;
+      const cy = p.colliderY ?? p.worldY + size;
+      const radius =
+        p.colliderRadius ?? Math.max(0.3, Math.min(0.75, p.asset.width * size * 0.15));
+      colliders.push({ x: cx, y: cy, radius });
+    }
+    return colliders;
+  }
+
   public dispose(): void {
     this.object3D.geometry.dispose();
     this.material.dispose();
   }
-}
-
-/** Quick procedural pine tree asset so you can test PropLayer before running pngToAscii */
-export function createSamplePineTree(): AsciiPropAsset {
-  const rows = [
-    '    ^    ',
-    '   /^\\   ',
-    '  /#*#\\  ',
-    ' /#%*%#\\ ',
-    '  /#*#\\  ',
-    ' /#%@%#\\ ',
-    '/#%@*@%#\\',
-    '   |||   ',
-    '   |||   ',
-  ];
-
-  const cells: AsciiPropCell[] = [];
-  const height = rows.length;
-  const width = rows[0].length;
-
-  for (let r = 0; r < height; r++) {
-    const line = rows[r];
-    const y = height - 1 - r; // Flip so y = 0 is the base of the trunk
-    for (let x = 0; x < line.length; x++) {
-      const char = line[x];
-      if (char === ' ') continue;
-
-      const isTrunk = y < 2;
-      cells.push({
-        x,
-        y,
-        char,
-        r: isTrunk ? 0.42 : 0.14,
-        g: isTrunk ? 0.28 : 0.46 + (y / height) * 0.22,
-        b: isTrunk ? 0.18 : 0.24,
-      });
-    }
-  }
-
-  return { name: 'pine_tree', width, height, cells };
 }

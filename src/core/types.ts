@@ -5,6 +5,12 @@ export interface Vec2 {
   y: number;
 }
 
+export interface CircleCollider {
+  x: number;
+  y: number;
+  radius: number;
+}
+
 export interface RGB {
   r: number; // 0.0 to 1.0
   g: number; // 0.0 to 1.0

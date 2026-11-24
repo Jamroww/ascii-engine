@@ -126,10 +126,17 @@ export class GrassLayer {
 
     this.mesh = new THREE.InstancedMesh(geometry, this.material, count);
 
-    for (let i = 0; i < count; i++) {
-      // Scatter blades organically across the field
+    // Scatter blades organically across the field. Blades that fall on the
+    // dirt footpath are mostly rerolled elsewhere so the path stays clear.
+    let i = 0;
+    while (i < count) {
       const x = (Math.random() - 0.5) * areaSize;
       const y = (Math.random() - 0.5) * areaSize;
+
+      const pathY = Math.sin(x * 0.55) * 1.3;
+      const onPath = Math.abs(y - pathY) < 0.85 && x > -6 && x < 9;
+      if (onPath && Math.random() < 0.8) continue;
+
       // Slight Z jitter so overlapping blades don't z-fight
       const z = 0.2 + Math.random() * 0.3;
 
@@ -164,6 +171,8 @@ export class GrassLayer {
         colors[i * 3 + 1] = 0.52 * shade;
         colors[i * 3 + 2] = 0.28 * shade;
       }
+
+      i++;
     }
 
     geometry.setAttribute('aGlyphIndex', new THREE.InstancedBufferAttribute(glyphIndices, 1));

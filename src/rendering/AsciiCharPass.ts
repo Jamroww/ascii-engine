@@ -28,11 +28,10 @@ const CHAR_FRAGMENT_SHADER = /* glsl */ `
     vec4 texColor = texture2D(uCharTex, sampleUv);
     if (texColor.a < 0.15) discard;
 
-    // 3. Map brightness (luminance) to density ramp in GlyphAtlas: .,:;-=+*#%@ (indices 1..11)
+    // 3. Map brightness (luminance) to density ramp in GlyphAtlas: .,:;-=+*#%@
     float lum = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
     float rampIndex = floor(clamp(lum, 0.0, 1.0) * 10.0) + 1.0;
 
-    // For shadows, use denser characters so the silhouette reads clearly on grass
     float idx = mix(rampIndex, clamp(rampIndex + 3.0, 4.0, 11.0), uIsShadow);
 
     float col = mod(idx, uAtlasGrid.x);
@@ -49,7 +48,7 @@ const CHAR_FRAGMENT_SHADER = /* glsl */ `
     if (uIsShadow > 0.5) {
       gl_FragColor = vec4(0.02, 0.03, 0.04, glyphAlpha * 0.72);
     } else {
-      // Slight rim boost so the character pops against the dark grass
+      // Warm rim boost so the traveler pops against the dark grass.
       vec3 finalColor = mix(texColor.rgb * 1.15, vec3(1.0, 0.94, 0.85), lum * 0.35);
       gl_FragColor = vec4(finalColor, glyphAlpha);
     }
@@ -68,15 +67,24 @@ export class AsciiCharPass {
   private readonly rightLeg: THREE.Mesh;
   private readonly leftArm: THREE.Mesh;
   private readonly rightArm: THREE.Mesh;
+  private readonly torso: THREE.Mesh;
+  private readonly cape: THREE.Mesh;
+  private readonly lanternCore: THREE.Mesh;
+  private readonly lanternCoreMat: THREE.MeshStandardMaterial;
+  private readonly lanternLight: THREE.PointLight;
 
   private readonly charMaterial: THREE.ShaderMaterial;
   private readonly shadowMaterial: THREE.ShaderMaterial;
+  private readonly toDispose: Array<{ dispose(): void }> = [];
 
   private walkPhase = 0;
   private facingAngle = 0;
 
+  // Read-back buffer for the live HUD portrait.
+  private readonly portraitPixels = new Uint8Array(128 * 128 * 4);
+
   constructor(atlas: GlyphAtlas) {
-    // 1. Offscreen 3D Render Target
+    // 1. Offscreen 3D render target.
     this.renderTarget = new THREE.WebGLRenderTarget(128, 128, {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
@@ -85,12 +93,11 @@ export class AsciiCharPass {
 
     this.offscreenScene = new THREE.Scene();
     this.offscreenCamera = new THREE.PerspectiveCamera(32, 1, 0.1, 20);
-    // Slight top-down RPG camera angle
     this.offscreenCamera.position.set(0, 2.2, 4.8);
     this.offscreenCamera.lookAt(0, 0.95, 0);
 
-    // 2. High-contrast lighting so the ASCII luminance ramp has strong volume
-    const keyLight = new THREE.DirectionalLight(0xfff1dc, 2.6);
+    // 2. High-contrast lighting so the ASCII luminance ramp has strong volume.
+    const keyLight = new THREE.DirectionalLight(0xfff1dc, 2.4);
     keyLight.position.set(2.5, 4.0, 3.0);
     this.offscreenScene.add(keyLight);
 
@@ -98,44 +105,122 @@ export class AsciiCharPass {
     rimLight.position.set(-3.0, 2.0, -2.5);
     this.offscreenScene.add(rimLight);
 
-    const ambient = new THREE.AmbientLight(0x3a4252, 0.65);
+    const ambient = new THREE.AmbientLight(0x3a4252, 0.6);
     this.offscreenScene.add(ambient);
 
-    // 3. Procedural 3D Cloaked Traveler
-    const cloakMat = new THREE.MeshStandardMaterial({ color: 0xb8c0c8, roughness: 0.7 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: 0x5c6470, roughness: 0.8 });
-    const accentMat = new THREE.MeshStandardMaterial({ color: 0xe6d2b5, roughness: 0.5 });
+    // Lantern glow that lights the cloak from below / behind the hand.
+    this.lanternLight = new THREE.PointLight(0xffb45e, 0, 3.4, 1.8);
+    this.lanternLight.position.set(0.34, 1.0, 0.35);
+    this.offscreenScene.add(this.lanternLight);
 
-    // Torso / Cloak
-    const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.36, 0.95, 8), cloakMat);
-    torso.position.y = 1.05;
-    this.charRig.add(torso);
+    // 3. Procedural cloaked traveler with hood, cape, staff and lantern.
+    const cloakMat = new THREE.MeshStandardMaterial({ color: 0x93a5b8, roughness: 0.85 });
+    const cloakDarkMat = new THREE.MeshStandardMaterial({ color: 0x525e70, roughness: 0.9 });
+    const hoodMat = new THREE.MeshStandardMaterial({ color: 0x7d90a6, roughness: 0.8 });
+    const skinMat = new THREE.MeshStandardMaterial({ color: 0x2b2620, roughness: 0.7 });
+    const leatherMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2c, roughness: 0.6 });
+    const woodMat = new THREE.MeshStandardMaterial({ color: 0x8a6b3f, roughness: 0.75 });
+    const metalMat = new THREE.MeshStandardMaterial({
+      color: 0x3a3f46,
+      roughness: 0.4,
+      metalness: 0.6,
+    });
+    this.lanternCoreMat = new THREE.MeshStandardMaterial({
+      color: 0xffc46a,
+      emissive: 0xffb45e,
+      emissiveIntensity: 2.4,
+      roughness: 0.4,
+    });
 
-    // Hooded Head
-    const head = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.42, 7), accentMat);
-    head.position.y = 1.72;
-    this.charRig.add(head);
+    // Cape draping behind the shoulders.
+    const capeGeo = new THREE.BoxGeometry(0.52, 1.15, 0.05);
+    capeGeo.translate(0, -0.5, -0.17);
+    this.cape = new THREE.Mesh(capeGeo, cloakDarkMat);
+    this.cape.position.set(0, 1.5, 0.06);
+    this.charRig.add(this.cape);
+    this.toDispose.push(capeGeo, cloakDarkMat);
 
-    // Limbs (pivoted at shoulders/hips)
-    const legGeo = new THREE.BoxGeometry(0.14, 0.58, 0.14);
+    // Torso / robe.
+    const torsoGeo = new THREE.CylinderGeometry(0.2, 0.36, 0.95, 9);
+    this.torso = new THREE.Mesh(torsoGeo, cloakMat);
+    this.torso.position.y = 1.05;
+    this.charRig.add(this.torso);
+    this.toDispose.push(torsoGeo, cloakMat);
+
+    // Leather belt at the waist.
+    const beltGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.07, 9);
+    const belt = new THREE.Mesh(beltGeo, leatherMat);
+    belt.position.y = 0.82;
+    this.charRig.add(belt);
+    this.toDispose.push(beltGeo, leatherMat);
+
+    // Hood.
+    const hoodGeo = new THREE.ConeGeometry(0.28, 0.52, 9);
+    const hood = new THREE.Mesh(hoodGeo, hoodMat);
+    hood.position.y = 1.78;
+    this.charRig.add(hood);
+    this.toDispose.push(hoodGeo, hoodMat);
+
+    // Shadowed face under the hood.
+    const faceGeo = new THREE.SphereGeometry(0.14, 8, 6);
+    const face = new THREE.Mesh(faceGeo, skinMat);
+    face.position.set(0, 1.62, 0.07);
+    this.charRig.add(face);
+    this.toDispose.push(faceGeo, skinMat);
+
+    // Legs (pivoted at the hips).
+    const legGeo = new THREE.BoxGeometry(0.14, 0.58, 0.15);
     legGeo.translate(0, -0.29, 0);
-    this.leftLeg = new THREE.Mesh(legGeo, darkMat);
+    this.leftLeg = new THREE.Mesh(legGeo, cloakDarkMat);
     this.leftLeg.position.set(-0.13, 0.6, 0);
-    this.rightLeg = new THREE.Mesh(legGeo, darkMat);
+    this.rightLeg = new THREE.Mesh(legGeo, cloakDarkMat);
     this.rightLeg.position.set(0.13, 0.6, 0);
     this.charRig.add(this.leftLeg, this.rightLeg);
+    this.toDispose.push(legGeo);
 
-    const armGeo = new THREE.BoxGeometry(0.11, 0.52, 0.11);
+    // Arms (pivoted at the shoulders).
+    const armGeo = new THREE.BoxGeometry(0.11, 0.5, 0.11);
     armGeo.translate(0, -0.24, 0);
     this.leftArm = new THREE.Mesh(armGeo, cloakMat);
-    this.leftArm.position.set(-0.28, 1.42, 0);
+    this.leftArm.position.set(-0.28, 1.4, 0);
     this.rightArm = new THREE.Mesh(armGeo, cloakMat);
-    this.rightArm.position.set(0.28, 1.42, 0);
+    this.rightArm.position.set(0.28, 1.4, 0);
     this.charRig.add(this.leftArm, this.rightArm);
+    this.toDispose.push(armGeo);
+
+    // Walking staff held in the left hand.
+    const staff = new THREE.Group();
+    const staffPoleGeo = new THREE.CylinderGeometry(0.028, 0.028, 1.7, 6);
+    const staffPole = new THREE.Mesh(staffPoleGeo, woodMat);
+    staffPole.position.y = 0.2;
+    staff.add(staffPole);
+    const staffFinialGeo = new THREE.SphereGeometry(0.07, 8, 6);
+    const staffFinial = new THREE.Mesh(staffFinialGeo, woodMat);
+    staffFinial.position.y = 1.08;
+    staff.add(staffFinial);
+    staff.position.set(-0.4, 0.55, 0.02);
+    this.charRig.add(staff);
+    this.toDispose.push(staffPoleGeo, staffFinialGeo, woodMat);
+
+    // Lantern held in the right hand.
+    const lantern = new THREE.Group();
+    const lanternTopGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.06, 6);
+    const lanternTop = new THREE.Mesh(lanternTopGeo, metalMat);
+    lanternTop.position.y = 0.16;
+    lantern.add(lanternTop);
+    const lanternFrameGeo = new THREE.BoxGeometry(0.15, 0.2, 0.15);
+    const lanternFrame = new THREE.Mesh(lanternFrameGeo, metalMat);
+    lantern.add(lanternFrame);
+    const lanternCoreGeo = new THREE.BoxGeometry(0.11, 0.16, 0.11);
+    this.lanternCore = new THREE.Mesh(lanternCoreGeo, this.lanternCoreMat);
+    lantern.add(this.lanternCore);
+    lantern.position.set(0.36, 0.9, 0.08);
+    this.rightArm.add(lantern);
+    this.toDispose.push(lanternTopGeo, lanternFrameGeo, lanternCoreGeo, metalMat);
 
     this.offscreenScene.add(this.charRig);
 
-    // 4. Main-scene ASCII Billboard & Fake Shadow
+    // 4. Main-scene ASCII billboard + fake shadow.
     const sharedUniforms = {
       uCharTex: { value: this.renderTarget.texture },
       uAtlas: { value: atlas.texture },
@@ -174,38 +259,57 @@ export class AsciiCharPass {
     moveX: number,
     moveY: number,
     sprint: boolean,
+    wading: boolean,
+    aimX: number,
+    aimY: number,
     worldX: number,
     worldY: number
   ): void {
     this.group.position.set(worldX, worldY, 0);
 
     const speed = Math.hypot(moveX, moveY);
-    if (speed > 0.05) {
-      // Smoothly rotate 3D character toward movement direction
-      const targetAngle = Math.atan2(moveX, -moveY);
+    const sink = wading ? -0.24 : 0;
+    const breathe = Math.sin(this.walkPhase) * 0.03;
+
+    // Face the aim direction (toward the mouse) rather than the movement.
+    const aimLen = Math.hypot(aimX, aimY);
+    if (aimLen > 0.001) {
+      const targetAngle = Math.atan2(aimX, -aimY);
       let diff = targetAngle - this.facingAngle;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      this.facingAngle += diff * Math.min(1, dt * 12);
+      this.facingAngle += diff * Math.min(1, dt * 14);
       this.charRig.rotation.y = this.facingAngle;
+    }
 
-      // Walk/sprint limb cycle
+    if (speed > 0.05) {
+      // Walk / sprint cycle.
       this.walkPhase += dt * (sprint ? 14 : 9);
-      const swing = Math.sin(this.walkPhase) * (sprint ? 0.75 : 0.5);
+      const swing = Math.sin(this.walkPhase) * (sprint ? 0.7 : 0.5);
       this.leftLeg.rotation.x = swing;
       this.rightLeg.rotation.x = -swing;
-      this.leftArm.rotation.x = -swing * 0.8;
-      this.rightArm.rotation.x = swing * 0.8;
-      this.charRig.position.y = Math.abs(Math.cos(this.walkPhase)) * 0.08;
+      this.leftArm.rotation.x = swing * 0.25; // staff arm stays planted
+      this.rightArm.rotation.x = -swing * 0.8; // lantern arm swings
+      this.cape.rotation.x = Math.sin(this.walkPhase) * 0.16 + 0.12;
+      this.torso.rotation.x = sprint ? 0.16 : 0.06;
+      this.charRig.position.y = sink + breathe + Math.abs(Math.cos(this.walkPhase)) * 0.07;
     } else {
-      // Settle back to subtle idle breathing
+      // Settle back into a gentle idle.
       this.leftLeg.rotation.x *= 0.85;
       this.rightLeg.rotation.x *= 0.85;
       this.leftArm.rotation.x *= 0.85;
       this.rightArm.rotation.x *= 0.85;
+      this.torso.rotation.x *= 0.85;
+      this.cape.rotation.x += (0.12 - this.cape.rotation.x) * Math.min(1, dt * 4);
       this.walkPhase += dt * 2.2;
-      this.charRig.position.y = Math.sin(this.walkPhase) * 0.03;
+      this.charRig.position.y = sink + breathe;
     }
+
+    // Lantern flicker and glow.
+    const flicker =
+      0.75 + Math.sin(this.walkPhase * 1.7) * 0.12 + Math.sin(this.walkPhase * 5.3) * 0.08;
+    this.lanternCoreMat.emissiveIntensity = 1.8 + flicker * 0.9;
+    this.lanternLight.intensity = flicker * 1.1;
   }
 
   public render(renderer: THREE.WebGLRenderer): void {
@@ -218,14 +322,21 @@ export class AsciiCharPass {
     renderer.setClearColor(0x000000, 0);
     renderer.clear();
     renderer.render(this.offscreenScene, this.offscreenCamera);
+    renderer.readRenderTargetPixels(this.renderTarget, 0, 0, 128, 128, this.portraitPixels);
 
     renderer.setRenderTarget(prevTarget);
     renderer.setClearColor(prevColor, prevAlpha);
+  }
+
+  public getPortraitPixels(): Uint8Array {
+    return this.portraitPixels;
   }
 
   public dispose(): void {
     this.renderTarget.dispose();
     this.charMaterial.dispose();
     this.shadowMaterial.dispose();
+    this.lanternCoreMat.dispose();
+    for (const item of this.toDispose) item.dispose();
   }
 }

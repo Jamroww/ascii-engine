@@ -1,4 +1,3 @@
-
 import type { IInputManager, InputState, Vec2 } from './types';
 
 const MOVE_KEYS: ReadonlySet<string> = new Set([
@@ -16,10 +15,16 @@ export class InputManager implements IInputManager {
   private readonly element: HTMLElement;
   private readonly pressed: Set<string> = new Set();
   private mouseNdc: Vec2 = { x: 0, y: 0 };
+  private wheelDelta = 0;
+  private attackQueued = false;
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (MOVE_KEYS.has(event.code)) {
       event.preventDefault();
+    }
+    if (event.code === 'Space') {
+      event.preventDefault();
+      if (!event.repeat) this.attackQueued = true;
     }
     this.pressed.add(event.code);
   };
@@ -39,6 +44,15 @@ export class InputManager implements IInputManager {
     };
   };
 
+  private readonly handleWheel = (event: WheelEvent): void => {
+    event.preventDefault();
+    this.wheelDelta += event.deltaY;
+  };
+
+  private readonly handlePointerDown = (event: PointerEvent): void => {
+    if (event.button === 0) this.attackQueued = true;
+  };
+
   private readonly handleBlur = (): void => {
     this.pressed.clear();
   };
@@ -49,6 +63,8 @@ export class InputManager implements IInputManager {
     window.addEventListener('keyup', this.handleKeyUp);
     window.addEventListener('blur', this.handleBlur);
     element.addEventListener('mousemove', this.handleMouseMove);
+    element.addEventListener('wheel', this.handleWheel, { passive: false });
+    element.addEventListener('pointerdown', this.handlePointerDown);
   }
 
   getState(): InputState {
@@ -76,11 +92,27 @@ export class InputManager implements IInputManager {
     };
   }
 
+  /** True once per attack (left click or Space), then cleared. */
+  takeAttack(): boolean {
+    const value = this.attackQueued;
+    this.attackQueued = false;
+    return value;
+  }
+
+  /** Accumulated mouse-wheel delta since the last call, then cleared. */
+  takeWheelDelta(): number {
+    const value = this.wheelDelta;
+    this.wheelDelta = 0;
+    return value;
+  }
+
   dispose(): void {
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
     window.removeEventListener('blur', this.handleBlur);
     this.element.removeEventListener('mousemove', this.handleMouseMove);
+    this.element.removeEventListener('wheel', this.handleWheel);
+    this.element.removeEventListener('pointerdown', this.handlePointerDown);
     this.pressed.clear();
   }
 }
