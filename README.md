@@ -1,11 +1,14 @@
 # ascii-engine
 
 A lightweight browser ASCII-game engine built on **Three.js** and **Vite** (TypeScript).
-Everything on screen — ground, grass, water, trees, the player, weather — is rendered as a
-grid of glyphs from a single character atlas, with a dark "wilted forest" aesthetic.
+Everything on screen — ground, grass, water, forest, buildings, the player, weather — is
+rendered as a grid of glyphs from a single character atlas, with a dark "wilted forest"
+aesthetic.
 
-The scene is a top-down clearing: a winding river, a dense treeline, scattered trees and
-props, and a hooded traveler holding a sword that aims at the mouse.
+The current scene is a **Riverside Village** in a top-down clearing: a dense swaying forest
+framing a village clearing, a cottage with glowing windows, a winding river that carries an
+upstream **Blight** (a toxic, glitching zone to the north), and a hooded traveler holding a
+sword that aims at the mouse.
 
 ---
 
@@ -44,8 +47,9 @@ This is the core idea, and worth understanding before touching any layer.
 1. **`GlyphAtlas`** bakes a charset (ordered roughly by visual density) into a
    `CanvasTexture` — white glyphs on transparent, tinted later in shaders. Every layer
    asks it for an index via `atlas.getIndex(char)`.
-2. **Most layers** (`GroundLayer`, `GrassLayer`, `PropLayer`, `Weapon`, `WeatherLayer`) are
-   `THREE.InstancedMesh`es. Each instance carries a `aGlyphIndex` and an `aColor`; the
+2. **Most layers** (`GroundLayer`, `GrassLayer`, `ForestLayer`, `BuildingLayer`, `Weapon`,
+   `WeatherLayer`) are `THREE.InstancedMesh`es. Each instance carries per-cell attributes
+   (`aGlyphIndex`, `aColor`, and sometimes extra like `aSwayWeight` / `aEmissive`); the
    fragment shader quantizes world/UV coordinates into a crisp glyph grid and samples the
    atlas cell for that glyph.
 3. **The character** (`AsciiCharPass`) is different: a procedural 3D rig is rendered
@@ -67,37 +71,39 @@ ascii-engine/
 ├── tsconfig.json           # strict flags — see "TypeScript gotchas" below
 ├── public/                 # favicon.svg, icons.svg (static assets)
 └── src/
-    ├── main.ts             # App entry: builds the starting area + wires layers to Engine
+    ├── main.ts             # App entry: builds the Riverside Village scene + layers
     ├── style.css           # page chrome + the HUD styles
     ├── counter.ts          # UNUSED — leftover Vite template demo (safe to delete)
     ├── assets/             # UNUSED — Vite template images (safe to delete)
     │
     ├── core/               # Engine, input, collision, stats, shared world layout
     │   ├── Engine.ts       # Game loop, camera (follow + zoom), player movement,
-    │   │                   #   collision resolution, wading, aim computation, layer orchestration
+    │   │                   #   collision resolution, wading, aim, layer orchestration
     │   ├── InputManager.ts # Keyboard/mouse/wheel state; one-shot attack + wheel-delta APIs
     │   ├── CollisionSystem.ts # Circle-collider resolve (push player out of overlaps)
     │   ├── PlayerStats.ts  # Health + stamina (sprint drains stamina, river drains health)
-    │   ├── world.ts        # ★ Single source of truth: river SDF, boulders, world bounds
+    │   ├── world.ts        # ★ River SDF + boulders (CPU side), world bounds, player radius
     │   └── types.ts        # Shared types (IRenderLayer, FrameContext, InputState, ...)
     │
     ├── rendering/          # All visual layers + shaders
     │   ├── GlyphAtlas.ts   # Character atlas texture + getIndex()
     │   ├── GroundLayer.ts  # Forest-floor grid: dirt footpath, fallen leaves, moss variation
     │   ├── GrassLayer.ts   # Swaying grass blades (wind + player push); clears the footpath
-    │   ├── WaterLayer.ts   # River shader: flow, ripples, foam, boulders, reflections, wade wake
-    │   ├── PropLayer.ts    # Renders AsciiPropAsset placements + exposes their colliders
-    │   ├── propAssets.ts   # ★ ASCII sprite definitions (trees, flower, rock, sword, ...)
+    │   ├── WaterLayer.ts   # ★ River shader: flow, boulders+wakes, Blight, reflections
+    │   ├── ForestLayer.ts  # ★ Procedural trees (pine/oak/wilted) + wind sway + shadows
+    │   ├── BuildingLayer.ts# ★ Building sprites with emissive windows + light spill
     │   ├── WeatherLayer.ts # Rain, fireflies/spores, drifting petals (instanced particles)
     │   ├── AtmosphereLayer.ts # Screen-space-ish vignette + distance fog overlay
     │   ├── AsciiCharPass.ts # ★ Offscreen 3D character → ASCII billboard + portrait read-back
-    │   └── Weapon.ts       # Top-down sword sprite that aims at the mouse and swings
+    │   ├── Weapon.ts       # Top-down sword sprite that aims at the mouse and swings
+    │   ├── PropLayer.ts    # (legacy) generic ASCII-prop renderer — now unused by main
+    │   └── propAssets.ts   # (legacy) prop builders; still supplies createSword() for Weapon
     │
     ├── ui/
     │   └── Hud.ts          # DOM HUD: live portrait + health/stamina bars
     │
     └── tools/
-        └── pngToAscii.ts   # CLI: convert a PNG → AsciiPropAsset JSON (uses sharp)
+        └── pngToAscii.ts   # CLI: convert a PNG → ASCII-prop JSON (uses sharp)
 ```
 
 The `★` entries are the ones you'll touch most often when adding content.
@@ -113,38 +119,52 @@ The `★` entries are the ones you'll touch most often when adding content.
   clearing is clamped to a ~19-unit radius (`WORLD_BOUNDS` in `world.ts`).
 - **Z-order** (camera looks down −Z from z=10, higher z = drawn on top):
 
-  | z   | layer          |
-  |-----|----------------|
-  | 0   | ground         |
-  | 0.2–0.5 | grass    |
-  | 0.55| water          |
-  | 0.95| props          |
-  | 1.2 | character      |
-  | 1.3 | weapon         |
-  | 2.5 | weather        |
-  | 5   | atmosphere (renderOrder 1000, depthTest off) |
+  | z          | layer                          |
+  |------------|--------------------------------|
+  | 0          | ground                         |
+  | 0.2–0.5    | grass                          |
+  | 0.51       | tree shadows                   |
+  | 0.52       | building light-spill pools     |
+  | 0.55       | water                          |
+  | 0.92–1.12  | forest trees (sorted by Y)     |
+  | 1.0        | buildings                      |
+  | 1.2        | character                      |
+  | 1.3        | weapon                         |
+  | 2.5        | weather                        |
+  | 5          | atmosphere (renderOrder 1000, depthTest off) |
 
   All materials are `transparent: true, depthWrite: false`, so three.js sorts them by z.
 
-### `world.ts` is the source of truth for the river
-The river channel (`riverSDF`) and boulders (`BOULDERS`) are defined **once** in
-`src/core/world.ts`. The CPU (collision + wading checks in `Engine`) *and* the GPU
-(`WaterLayer` interpolates the constants into its GLSL) both read from it, so they can't
-drift apart. If you reshape the river, change it in `world.ts` — the shader picks it up.
+### The river is defined in THREE places — keep them in sync
+The river channel (and its boulders) are duplicated, not shared:
 
-### Adding a new prop
-1. Add a `createX()` builder in `src/rendering/propAssets.ts` using `buildProp(name, rows, palette)`
-   (`rows` are top-to-bottom strings; `y = 0` is the base).
-2. Place it in `src/main.ts` via a `PropPlacement` (`worldX`, `worldY` are the sprite's
-   **bottom-left**; pass `colliderRadius` for solidity, or `colliderX/Y` to override the
-   collider centre for off-centre sprites).
-3. Trees/rocks are solid automatically via `PropLayer.getColliders()`.
+1. **`src/core/world.ts`** — the CPU-side copy (`riverSDF`, `BOULDERS`, `isInRiver`), used
+   by `Engine` for wading detection, boulder collision and world bounds.
+2. **`WaterLayer`'s GLSL** — a hardcoded `riverSDF` + `rock1/rock2/rock3` for rendering.
+3. **`ForestLayer.riverDistance()`** — a hardcoded mirror so trees don't spawn in the river.
 
-### Adding a new visual layer
-Implement `IRenderLayer` (`object3D`, `update(ctx)`, optional `preRender`, `dispose`) and
-register it with `engine.addLayer(...)`. If it needs per-frame camera/viewport info, follow
-the `AtmosphereLayer` pattern (core layers like ground/grass/character are owned by `Engine`
-directly instead).
+If you reshape the river, change **all three** together. (`world.ts` still describes itself
+as the single source of truth; that's aspirational — the shader no longer interpolates from
+it after the village refactor.)
+
+### Content layers (how to add stuff)
+- **Trees** — `ForestLayer` builds one `InstancedMesh` from three procedural `TreeAsset`s
+  (`createAncientPine`, `createGnarledOak`, `createWiltedTree`). Each cell carries a
+  `swayWeight` (0 for trunk/roots, 0.15–1.0 for canopy) so the vertex shader only bends the
+  crown. Placements come from `generateRiversideForest(seed)` — deterministic, ~220 trees,
+  keeps the river + village clearing + northern trail clear. `getColliders()` exposes a
+  trunk collider per tree.
+- **Buildings** — `BuildingLayer` renders `BuildingAsset`s whose cells carry an `emissive`
+  flag (glowing windows / lanterns) and a `lights` list that spawns additive light-spill
+  pools onto the grass. See `createRiversideCottage()` for the layout-string convention.
+- **Water lights** — `WaterLayer.setLights(WaterLight[])` feeds up to 8 world lights into
+  the shader for extra reflections (e.g. cottage windows mirroring in the river).
+
+### Collision is only partially wired
+`Engine` owns a `CollisionSystem` and registers the **river boulders** (from `world.ts`).
+`ForestLayer.getColliders()` and `BuildingLayer.getColliders()` exist, but **`main.ts` does
+not currently call `engine.collision.addMany(...)`** for them — so trees and buildings don't
+block movement yet. Wire them up when you want solid trunks/walls.
 
 ### The character is two separate things
 - **Body/aim** — `AsciiCharPass` is a 3D rig rendered offscreen. It faces the mouse via
@@ -168,9 +188,12 @@ render).
 
 ### The `pngToAscii` tool
 `npx tsx src/tools/pngToAscii.ts <input.png> <out.json> [targetWidth]` converts an image to
-an `AsciiPropAsset` JSON you can drop into `propAssets.ts`. It needs `sharp` (already a
-devDependency).
+an ASCII-prop JSON. It needs `sharp` (already a devDependency).
 
 ### Dead weight you can delete
-`src/counter.ts` and `src/assets/*` are unused Vite-template leftovers. The empty `mkdir`
-file at the repo root is also stray.
+- `src/counter.ts` and `src/assets/*` — unused Vite-template leftovers.
+- The empty `mkdir` file at the repo root — stray.
+- `src/rendering/PropLayer.ts` and most of `propAssets.ts` — the earlier prop system,
+  superseded by `ForestLayer`/`BuildingLayer`. Keep `propAssets.ts` around for now: its
+  `createSword()` is still imported by `Weapon`, and `PropLayer.ts` still exports the
+  `AsciiPropAsset`/`AsciiPropCell` types that `propAssets` uses.
