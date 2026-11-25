@@ -95,7 +95,7 @@ export class Engine {
   private readonly ndcVec = new THREE.Vector2();
   private readonly hitVec = new THREE.Vector3();
 
-  private viewHeight = 26;
+  private viewHeight = 22;
   private editorMode = false;
   public readonly playerPos = new THREE.Vector2(0, 0);
   private readonly clock = new THREE.Clock();
@@ -426,46 +426,51 @@ export class Engine {
   }
 
   /**
-   * Capture only the player, mirrored across the water plane (y = -0.05), into
-   * the half-res reflection target. Exactly one extra draw call per frame.
+   * Capture the player plus the nearby shoreline world models and trees,
+   * mirrored across the water plane (y = -0.05), into the half-res reflection
+   * target. Exactly one extra draw call per frame.
    */
   private renderPlayerReflection(): void {
     if (!this.waterObject) return;
 
-    const group = this.player3D.group;
+    const playerGroup = this.player3D.group;
 
-    // Hide every world object except the player and the lights so this pass
-    // captures just the character silhouette.
+    // Reflect the player and every shoreline world model + tree; hide the flat
+    // ground/water planes, enemies and legacy billboards, but keep the lights
+    // so the mirrored silhouettes stay moonlit.
+    const reflectables: THREE.Object3D[] = [playerGroup];
     const hidden: THREE.Object3D[] = [];
     for (const child of this.scene.children) {
-      if (child === group) continue;
+      if (child === playerGroup) continue;
       if ((child as THREE.Light).isLight) continue;
-      if (child.visible) {
+      if (child.userData.isWorldReflection === true) {
+        reflectables.push(child);
+      } else if (child.visible) {
         child.visible = false;
         hidden.push(child);
       }
     }
 
-    // The mirrored mesh flips winding order, so render it double-sided to avoid
-    // hollow/inside-out culling on the cloak, hood and sword blade.
+    // The mirrored meshes flip winding order, so render them double-sided to
+    // avoid hollow/inside-out culling on cloaks, rooflines and canopies.
     const sides: Array<{ material: THREE.Material; side: THREE.Side }> = [];
-    group.traverse((obj) => {
-      const mesh = obj as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const material = mesh.material;
-      if (Array.isArray(material)) {
-        for (const m of material) {
-          sides.push({ material: m, side: m.side });
-          m.side = THREE.DoubleSide;
+    for (const reflectable of reflectables) {
+      reflectable.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const material = mesh.material;
+        if (Array.isArray(material)) {
+          for (const m of material) {
+            sides.push({ material: m, side: m.side });
+            m.side = THREE.DoubleSide;
+          }
+        } else {
+          sides.push({ material: material, side: material.side });
+          material.side = THREE.DoubleSide;
         }
-      } else {
-        sides.push({ material: material, side: material.side });
-        material.side = THREE.DoubleSide;
-      }
-    });
+      });
+    }
 
-    const prevScaleY = group.scale.y;
-    const prevY = group.position.y;
     const prevShadowEnabled = this.renderer.shadowMap.enabled;
     const prevTarget = this.renderer.getRenderTarget();
     const prevBackground = this.scene.background;
@@ -473,10 +478,20 @@ export class Engine {
     this.renderer.getClearColor(prevColor);
     const prevAlpha = this.renderer.getClearAlpha();
 
-    // Mirror the mesh: feet land at y = -0.10 and the body extends downward by
-    // its exact height, so the reflection stays bounded to the character.
-    group.scale.y = -1;
-    group.position.y = -0.10;
+    // Mirror each reflectable across y = -0.05: the base lands at y = -0.10 and
+    // the body extends downward by its exact height, keeping the reflection
+    // bounded to the character, buildings and trees.
+    const transforms: Array<{ object: THREE.Object3D; scaleY: number; y: number }> = [];
+    for (const reflectable of reflectables) {
+      transforms.push({
+        object: reflectable,
+        scaleY: reflectable.scale.y,
+        y: reflectable.position.y,
+      });
+      reflectable.scale.y = -1;
+      reflectable.position.y = -0.10;
+    }
+
     this.renderer.shadowMap.enabled = false;
     this.scene.background = null;
 
@@ -490,12 +505,15 @@ export class Engine {
     this.renderer.shadowMap.enabled = prevShadowEnabled;
     this.scene.background = prevBackground;
 
-    group.scale.y = prevScaleY;
-    group.position.y = prevY;
+    for (const t of transforms) {
+      t.object.scale.y = t.scaleY;
+      t.object.position.y = t.y;
+    }
     for (const s of sides) s.material.side = s.side;
     for (const child of hidden) child.visible = true;
 
-    // Hand the fresh reflection + full-res pixel size to the water shader.
+    // Hand the fresh reflection + full-res drawing-buffer size to the water
+    // shader so the screen-space UV lookup lines up exactly.
     const mesh = this.waterObject as THREE.Mesh | null;
     const material = mesh?.material as THREE.ShaderMaterial | undefined;
     if (material?.uniforms) {
@@ -514,7 +532,7 @@ export class Engine {
     // Camera zoom (scroll in / out), paused while a modal is open.
     const wheel = this.input.takeWheelDelta();
     if (wheel !== 0 && !this.dialogueOpen && !this.inventoryOpen) {
-      this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 18, 36);
+      this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 16, 32);
       this.applyViewport();
     }
 

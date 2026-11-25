@@ -165,6 +165,28 @@ const TREE_FACTORIES: Record<TreeKind, () => THREE.Group> = {
   wilted: createTreeWiltedModel,
 };
 
+/**
+ * Lift dark tree albedos so russet/umber trunks and foliage read as sculpted
+ * ASCII gradients instead of black cutouts, and stop canopies from receiving
+ * shadows so they cast crisp ground shadows without self-shadowing black.
+ */
+function liftTreeMaterials(tree: THREE.Group): void {
+  tree.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    const mat = node.material;
+    if (mat instanceof THREE.MeshStandardMaterial && !node.userData.isEmissive) {
+      mat.color.offsetHSL(0, 0, 0.14);
+      mat.emissive = mat.color.clone().multiplyScalar(0.16);
+    }
+
+    const geo = node.geometry;
+    const canopy =
+      (geo instanceof THREE.ConeGeometry || geo instanceof THREE.DodecahedronGeometry) &&
+      node.position.y > 1.0;
+    if (canopy) node.receiveShadow = false;
+  });
+}
+
 /** Instantiates real 3D trees around the perimeter ring with shadow casting. */
 export class ForestLayer implements IRenderLayer {
   public readonly object3D = new THREE.Group();
@@ -173,6 +195,7 @@ export class ForestLayer implements IRenderLayer {
   private colliders: Array<{ x: number; y: number; radius: number }> = [];
 
   constructor(placements: TreePlacement[]) {
+    this.object3D.userData.isWorldReflection = true;
     this.build(placements);
   }
 
@@ -208,6 +231,7 @@ export class ForestLayer implements IRenderLayer {
       const scale = p.scale ?? 1.0;
       tree.scale.setScalar(scale);
       setCastShadow(tree, true);
+      liftTreeMaterials(tree);
       this.object3D.add(tree);
       this.trees.push(tree);
 

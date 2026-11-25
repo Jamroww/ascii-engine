@@ -43,14 +43,16 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
 
     vec2 base = cell * uCellSize + uCellSize * 0.5 + uGridOffset;
 
-    // 3x3 sub-cell box average suppresses sub-pixel shimmer on thin geometry.
+    // Tight 2x2 sub-cell average keeps fine silhouettes, rooflines and limbs
+    // razor-sharp without sub-pixel moiré shimmer.
     vec3 col = vec3(0.0);
-    for (int j = -1; j <= 1; j++) {
-      for (int i = -1; i <= 1; i++) {
-        col += sampleScene(base + vec2(float(i), float(j)) * (uCellSize * 0.25));
+    for (int j = 0; j < 2; j++) {
+      for (int i = 0; i < 2; i++) {
+        vec2 off = (vec2(float(i), float(j)) * 2.0 - 1.0) * (uCellSize * 0.18);
+        col += sampleScene(base + off);
       }
     }
-    col /= 9.0;
+    col *= 0.25;
 
     vec3 tn = tonemap(col);
     float L = dot(tn, LUMA);
@@ -115,7 +117,7 @@ export class AsciiPostProcess {
         uSceneTex: { value: this.sceneRT.texture },
         uAtlasTex: { value: atlas.texture },
         uResolution: { value: new THREE.Vector2(1, 1) },
-        uCellSize: { value: new THREE.Vector2(7, 11) },
+        uCellSize: { value: new THREE.Vector2(5.5, 8.5) },
         uGridOffset: { value: new THREE.Vector2(0, 0) },
         uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
         uGlyphCount: { value: atlas.count },
@@ -144,7 +146,7 @@ export class AsciiPostProcess {
     this.sceneRT.setSize(width, height);
     (this.material.uniforms.uResolution.value as THREE.Vector2).set(width, height);
     const dpr = renderer.getPixelRatio();
-    (this.material.uniforms.uCellSize.value as THREE.Vector2).set(7 * dpr, 11 * dpr);
+    (this.material.uniforms.uCellSize.value as THREE.Vector2).set(5.5 * dpr, 8.5 * dpr);
   }
 
   public setBurstGlow(amount: number): void {

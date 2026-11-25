@@ -28,6 +28,7 @@ export class Player3D {
   constructor() {
     this.model = createPlayerTravelerModel();
     setCastShadow(this.model, true);
+    this.stylizeTraveler(this.model);
     this.group.add(this.model);
 
     this.handPivot.position.set(0.4, 0.95, 0.16);
@@ -35,6 +36,7 @@ export class Player3D {
 
     // Dedicated portrait rig: a second traveler instance under its own camera.
     this.portraitModel = createPlayerTravelerModel();
+    this.stylizeTraveler(this.portraitModel);
     this.portraitScene.add(this.portraitModel);
 
     const key = new THREE.DirectionalLight(0xffffff, 3.4);
@@ -55,6 +57,30 @@ export class Player3D {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.NearestFilter,
       format: THREE.RGBAFormat,
+    });
+  }
+
+  /**
+   * Strengthen the traveler's chiaroscuro: lift the lit hood, shoulder mantle
+   * and pauldrons to crisp pale silver-white (#f2f6ff) with a cool emissive
+   * floor so the upper silhouette reads clearly and drops into the dark cloak
+   * folds below, while the warm hip lantern stays untouched.
+   */
+  private stylizeTraveler(root: THREE.Group): void {
+    const lit = new THREE.Color('#f2f6ff');
+    root.traverse((node) => {
+      if (!(node instanceof THREE.Mesh)) return;
+      const mat = node.material;
+      if (!(mat instanceof THREE.MeshStandardMaterial)) return;
+      if (node.userData.isEmissive) return;
+
+      const hex = mat.color.getHex();
+      const isPaleUpper =
+        (hex === 0xf0f4fa || hex === 0xcbd2d9) && node.position.y > 1.2;
+      if (!isPaleUpper) return;
+
+      mat.color.copy(lit);
+      mat.emissive = lit.clone().multiplyScalar(0.18);
     });
   }
 

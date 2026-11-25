@@ -45,6 +45,7 @@ export class WorldModelsLayer implements IRenderLayer {
   private highlightId: string | null = null;
 
   constructor(placements: WorldModelPlacement[]) {
+    this.object3D.userData.isWorldReflection = true;
     this.rebuild(placements);
   }
 
@@ -144,6 +145,7 @@ export class WorldModelsLayer implements IRenderLayer {
     model.position.set(placement.x, 0, -placement.y);
     setCastShadow(model, true);
     setReceiveShadow(model, true);
+    liftWorldModelMaterials(model);
 
     const entry: WorldModelEntry = {
       placement,
@@ -210,4 +212,33 @@ function collectEmissiveLights(
   });
 
   return out;
+}
+
+/**
+ * Lift the very dark albedos on every non-emissive surface so cottage shingles,
+ * walls, docks, rowboats and russet/umber tree trunks read as rich sculpted
+ * ASCII gradients rather than solid black cutouts with a single bright ridge
+ * line. Also stops pitched roofs and tree canopies from receiving shadows so
+ * they cast crisp ground shadows without self-shadowing themselves black.
+ */
+function liftWorldModelMaterials(model: THREE.Group): void {
+  model.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    const mat = node.material;
+    if (mat instanceof THREE.MeshStandardMaterial && !node.userData.isEmissive) {
+      mat.color.offsetHSL(0, 0, 0.14);
+      mat.emissive = mat.color.clone().multiplyScalar(0.16);
+    }
+
+    const geo = node.geometry;
+    // Tree canopies (hero pine / oak / wilted foliage).
+    const canopy =
+      (geo instanceof THREE.ConeGeometry || geo instanceof THREE.DodecahedronGeometry) &&
+      node.position.y > 1.0;
+    // Pitched roof planes on cottages, boathouses and dock awnings.
+    const pitchedRoof =
+      geo instanceof THREE.BoxGeometry &&
+      (Math.abs(node.rotation.x) > 0.25 || Math.abs(node.rotation.z) > 0.25);
+    if (canopy || pitchedRoof) node.receiveShadow = false;
+  });
 }

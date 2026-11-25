@@ -139,7 +139,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     col += min(lightAccum, vec3(0.28, 0.14, 0.03));
 
     // --- Sculpted reflected moon (hero landmark) ---
-    vec2 moonCenter = vec2(8.2, 2.0) + uPlayerPos * 0.25;
+    vec2 moonCenter = vec2(8.2 + uPlayerPos.x * 0.05, uPlayerPos.y * 0.85 + 1.5);
     vec2 moonD = vWorld - moonCenter;
     // Compensate for 3/4 camera pitch foreshortening so moon looks round on screen.
     vec2 moonEllip = vec2(moonD.x, moonD.y * 0.72);
@@ -175,10 +175,13 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     if (uScreenResolution.x > 2.0) {
       float worldZ = -vWorld.y;
       vec2 refUv = gl_FragCoord.xy / uScreenResolution;
-      refUv.x += sin(worldZ * 10.0 + uTime * 3.5) * 0.0035;
+      refUv.x += sin(worldZ * 10.0 + uTime * 3.5) * 0.005;
       vec4 ref = texture2D(uPlayerReflectionTex, refUv);
-      float refFade = 1.0 - overhang * 0.85;
-      col += min(ref.rgb * 0.45, vec3(0.45)) * ref.a * refFade;
+      // Reflections are clearest in the shadowed bank water; fade only at the
+      // immediate bank lip so they never bleed a hard mirror line ashore.
+      float refFade = 1.0 - smoothstep(-0.14, -0.02, edgeDist);
+      float ripple = 0.78 + 0.22 * sin(vWorld.y * 14.0 + uTime * 3.2);
+      col += min(ref.rgb * 0.95, vec3(0.75)) * ref.a * refFade * ripple;
     }
 
     // --- Player wading ripples + trailing downstream V-wake ---
@@ -194,7 +197,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
       vec2 toPlayer = vWorld - uPlayerPos;
       float along = dot(toPlayer, velDir);
       float perp = abs(dot(toPlayer, vec2(-velDir.y, velDir.x)));
-      float wake = (1.0 - smoothstep(0.0, 0.65, perp)) * smoothstep(-2.4, 0.0, along);
+      float wake = (1.0 - smoothstep(0.0, 0.65, perp)) * smoothstep(-2.4, -0.15, along) * (1.0 - smoothstep(-0.05, 0.25, along));
 
       float rippleStrength = (ring1 + ring2) * 0.85 + wake * 0.55;
       col += vec3(0.24, 0.30, 0.38) * rippleStrength;

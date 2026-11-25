@@ -58,24 +58,30 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
     float blight = t.g;
 
     float n = fbm(vWorld * 0.38 + vec2(5.2, -3.7));
+    float grain = fbm(vWorld * 0.85 + vec2(-2.3, 6.1));
 
-    // Wild/grassy ground is pure pitch black (#010202) so no grey ASCII dot
-    // static bleeds behind the grass blades.
-    vec3 col = vec3(0.004, 0.008, 0.008);
+    // Wild deep-forest floor stays dark and cool so the 3D grass tufts still pop
+    // cleanly against a faint moonlit ground instead of a flat black floor.
+    vec3 col = mix(vec3(0.015, 0.020, 0.024), vec3(0.023, 0.031, 0.037), grain);
 
-    // Subtle low-contrast dark damp-earth contour ONLY on the packed dirt
-    // footpath (path > ~0.6).
+    // Moonlit village clearing / trail: subtle cool-slate elevation contour bands.
+    float cleared = smoothstep(0.0, 0.5, path);
+    float elev = fbm(vWorld * 0.22 + vec2(8.0, -1.4));
+    float bandF = fract(elev * 2.6);
+    float band = smoothstep(0.0, 0.5, bandF) * (1.0 - smoothstep(0.5, 1.0, bandF));
+    col += vec3(0.05, 0.066, 0.085) * band * cleared;
+
+    // Warm damp-earth footpath (the packed-dirt path band).
     float pathBand = smoothstep(0.6, 0.95, path);
-    if (pathBand > 0.0) {
-      vec3 dirt = vec3(0.14, 0.10, 0.065) * (0.6 + n * 0.5);
-      col = mix(col, dirt, pathBand * 0.85);
-    }
+    vec3 dirt = vec3(0.16, 0.115, 0.072) * (0.55 + n * 0.6);
+    col = mix(col, dirt, pathBand * 0.9);
 
-    // Immediate riverbank lips: faint damp-slate edge so the shore reads cleanly
-    // against the obsidian water, without lighting up the whole ground.
-    float bank = 1.0 - smoothstep(0.0, 2.5, edgeDist);
-    vec3 bankCol = vec3(0.05, 0.07, 0.09) * (0.7 + n * 0.5);
-    col = mix(col, bankCol, bank * 0.6);
+    // Rocky shoreline lips hugging the riverbank (sdf 0.0 .. +1.2) that read
+    // cleanly around and between the grass tufts.
+    float shore = 1.0 - smoothstep(0.0, 1.2, edgeDist);
+    float rockGrain = fbm(vWorld * 1.5 + vec2(-4.4, 7.8));
+    vec3 shoreCol = vec3(0.075, 0.095, 0.115) * (0.6 + rockGrain * 0.55);
+    col = mix(col, shoreCol, shore * 0.8);
 
     // Cold blight tint where corrupted.
     col = mix(col, vec3(0.04, 0.09, 0.06), blight * 0.3);
