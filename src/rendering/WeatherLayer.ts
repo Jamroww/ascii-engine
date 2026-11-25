@@ -94,7 +94,9 @@ export class WeatherLayer implements IRenderLayer {
     const colors = new Float32Array(total * 3);
     const types = new Float32Array(total);
 
-    const rainIdx = atlas.getIndex('/');
+    // The density ramp dropped the apostrophe, so rain falls as a thin colon
+    // droplet; spores and petals use the same chars as before.
+    const rainIdx = atlas.getIndex(':');
     const sporeIdx = atlas.getIndex('.');
     const petalIdx = atlas.getIndex('*');
 

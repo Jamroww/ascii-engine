@@ -14,43 +14,56 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uAtlasTex;
   uniform vec2 uResolution;
   uniform vec2 uCellSize;
+  uniform vec2 uGridOffset;
   uniform vec2 uAtlasGrid;
   uniform float uGlyphCount;
   uniform float uBurstGlow;
 
+  const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+
+  vec3 tonemap(vec3 c) {
+    c = max(c, vec3(0.0));
+    // Soft Reinhard shoulder preserves bright moon / emissive windows without
+    // crushing dark-slate buildings and trees in linear space.
+    c = c / (c + vec3(0.45));
+    // Clean linear -> sRGB decode.
+    return pow(c, vec3(1.0 / 2.2));
+  }
+
+  vec3 sampleScene(vec2 px) {
+    vec2 uv = px / uResolution;
+    uv = clamp(uv, vec2(0.5) / uResolution, vec2(1.0) - vec2(0.5) / uResolution);
+    return texture2D(uSceneTex, uv).rgb;
+  }
+
   void main() {
-    // Uniform 7x10-pixel character cells across the whole viewport.
-    vec2 cell = floor(gl_FragCoord.xy / uCellSize);
-    vec2 cellUv = fract(gl_FragCoord.xy / uCellSize);
+    vec2 shifted = gl_FragCoord.xy - uGridOffset;
+    vec2 cell = floor(shifted / uCellSize);
+    vec2 cellUv = fract(shifted / uCellSize);
 
-    // 2x2 sub-cell average of the scene colour to suppress shimmering on thin
-    // geometry (sword blades, tree boughs) while keeping crisp per-cell output.
-    vec2 base = (cell + 0.5) * uCellSize;
-    vec2 o = uCellSize * 0.25;
+    vec2 base = cell * uCellSize + uCellSize * 0.5 + uGridOffset;
+
+    // 3x3 sub-cell box average suppresses sub-pixel shimmer on thin geometry.
     vec3 col = vec3(0.0);
-    col += texture2D(uSceneTex, (base + vec2(-o.x, -o.y)) / uResolution).rgb;
-    col += texture2D(uSceneTex, (base + vec2( o.x, -o.y)) / uResolution).rgb;
-    col += texture2D(uSceneTex, (base + vec2(-o.x,  o.y)) / uResolution).rgb;
-    col += texture2D(uSceneTex, (base + vec2( o.x,  o.y)) / uResolution).rgb;
-    col *= 0.25;
+    for (int j = -1; j <= 1; j++) {
+      for (int i = -1; i <= 1; i++) {
+        col += sampleScene(base + vec2(float(i), float(j)) * (uCellSize * 0.25));
+      }
+    }
+    col /= 9.0;
 
-    // Linear -> sRGB BEFORE any luminance work, otherwise the whole scene reads
-    // pitch black and dark tones crush together. Exposure + soft tone mapping
-    // first, then the gamma decode.
-    col = col * 1.85;
-    col = col / (col + vec3(0.55));
-    col = pow(max(col, vec3(0.0)), vec3(1.0 / 2.2));
+    vec3 tn = tonemap(col);
+    float L = dot(tn, LUMA);
 
-    // Perceptual luminance on the gamma-corrected colour; a near-black floor
-    // reads as pure #000000 (no haze).
-    float L = dot(col, vec3(0.299, 0.587, 0.114));
-    if (L < 0.04) {
+    // Pure #000000 floor for pitch-black ground/bank undercuts, while letting
+    // moonlit buildings, trees, and midnight water remain clearly legible.
+    if (L < 0.065) {
       gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
       return;
     }
 
-    // Map luminance cleanly onto the glyph ramp.
-    float mapped = pow(clamp(L, 0.0, 1.0), 0.82);
+    // Linear remap across the glyph ramp (no S-curve shadow crush).
+    float mapped = clamp((L - 0.065) / 0.84, 0.0, 1.0);
     float idx = floor(mapped * (uGlyphCount - 1.0) + 0.5);
     float gcol = mod(idx, uAtlasGrid.x);
     float grow = floor(idx / uAtlasGrid.x);
@@ -60,27 +73,21 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
     );
     float glyphAlpha = texture2D(uAtlasTex, atlasUv).a;
 
-    // Decouple glyph brightness from raw colour. Sparse glyphs already encode
-    // darkness via ink coverage, so pull a hue-preserving chroma and lift the
-    // darker ramp entries (dot, colon, dash) back into visible nocturnal tones
-    // while lit surfaces (player, moon, cottage windows) stay bright/saturated.
-    vec3 chroma = col / max(max(col.r, max(col.g, col.b)), 0.001);
-    vec3 fgColor = mix(col, chroma, 0.45) * mix(0.65, 1.35, L);
+    // Preserve hue on midtones (slate stone, timber, russet bark, navy water).
+    // Sparse glyphs already encode darkness via coverage, so keep foreground ink
+    // visible (0.42..1.05) instead of squaring darkness with *= mapped.
+    vec3 chroma = tn / max(max(tn.r, max(tn.g, tn.b)), 0.001);
+    vec3 fgColor = mix(tn, chroma, 0.45);
+    fgColor = mix(fgColor, vec3(1.0), smoothstep(0.78, 0.96, L));
+    fgColor *= mix(0.42, 1.05, mapped);
 
-    // Minimal warm Radiant Burst pulse.
+    // Warm Radiant Burst pulse.
     fgColor += vec3(0.30, 0.16, 0.04) * uBurstGlow;
 
     gl_FragColor = vec4(fgColor * glyphAlpha, 1.0);
   }
 `;
 
-/**
- * Unified screen-space ASCII pass. Renders the full 3D world into an offscreen
- * target, then re-quantizes the whole viewport into a crisp fixed 7x10-pixel
- * glyph grid backed by the GlyphAtlas. It also orchestrates the two post-ASCII
- * compositing passes: a depth-only prepass so the razor-sharp 3D grass can be
- * depth-tested against the opaque world, then the grass and weather overlays.
- */
 export class AsciiPostProcess {
   private readonly sceneRT: THREE.WebGLRenderTarget;
   private readonly postScene = new THREE.Scene();
@@ -88,6 +95,8 @@ export class AsciiPostProcess {
   private readonly material: THREE.ShaderMaterial;
   private readonly quad: THREE.Mesh;
   private readonly depthOnlyMaterial: THREE.MeshBasicMaterial;
+  private readonly originVec = new THREE.Vector3();
+  private readonly drawSize = new THREE.Vector2();
 
   constructor(atlas: GlyphAtlas) {
     this.sceneRT = new THREE.WebGLRenderTarget(1, 1, {
@@ -106,7 +115,8 @@ export class AsciiPostProcess {
         uSceneTex: { value: this.sceneRT.texture },
         uAtlasTex: { value: atlas.texture },
         uResolution: { value: new THREE.Vector2(1, 1) },
-        uCellSize: { value: new THREE.Vector2(7, 10) },
+        uCellSize: { value: new THREE.Vector2(7, 11) },
+        uGridOffset: { value: new THREE.Vector2(0, 0) },
         uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
         uGlyphCount: { value: atlas.count },
         uBurstGlow: { value: 0 },
@@ -119,15 +129,12 @@ export class AsciiPostProcess {
     this.quad.frustumCulled = false;
     this.postScene.add(this.quad);
 
-    // Populates the screen hardware Z-buffer with the opaque solids so the
-    // grass can depth-test against them without drawing any colour.
     this.depthOnlyMaterial = new THREE.MeshBasicMaterial({
       colorWrite: false,
       depthWrite: true,
     });
   }
 
-  /** Resize the offscreen scene target to the renderer's drawing buffer. */
   public setSize(renderer: THREE.WebGLRenderer): void {
     const size = new THREE.Vector2();
     renderer.getDrawingBufferSize(size);
@@ -136,21 +143,34 @@ export class AsciiPostProcess {
     if (width <= 0 || height <= 0) return;
     this.sceneRT.setSize(width, height);
     (this.material.uniforms.uResolution.value as THREE.Vector2).set(width, height);
+    const dpr = renderer.getPixelRatio();
+    (this.material.uniforms.uCellSize.value as THREE.Vector2).set(7 * dpr, 11 * dpr);
   }
 
-  /** Warm golden pulse uniform (driven by Radiant Burst). */
   public setBurstGlow(amount: number): void {
     this.material.uniforms.uBurstGlow.value = amount;
   }
 
-  /**
-   * Full-frame render with every clear managed explicitly (the renderer has
-   * `autoClear = false`):
-   *   1. world -> sceneRT (clear colour + depth) -> ASCII quantize
-   *   2. ASCII quantize -> screen (clear colour + depth)
-   *   3. depth-only solids -> screen Z-buffer (clear depth ONLY, preserve colour)
-   *   4. depth-tested grass, then weather, then editor overlay (no clear)
-   */
+  private updateGridOffset(
+    renderer: THREE.WebGLRenderer,
+    worldCamera: THREE.OrthographicCamera,
+  ): void {
+    renderer.getDrawingBufferSize(this.drawSize);
+    const width = this.drawSize.x;
+    const height = this.drawSize.y;
+    if (width <= 0 || height <= 0) return;
+
+    worldCamera.updateMatrixWorld(true);
+    this.originVec.set(0, 0, 0).project(worldCamera);
+
+    const cellSize = this.material.uniforms.uCellSize.value as THREE.Vector2;
+    const px = (this.originVec.x * 0.5 + 0.5) * width;
+    const py = (this.originVec.y * 0.5 + 0.5) * height;
+    const ox = ((px % cellSize.x) + cellSize.x) % cellSize.x;
+    const oy = ((py % cellSize.y) + cellSize.y) % cellSize.y;
+    (this.material.uniforms.uGridOffset.value as THREE.Vector2).set(ox, oy);
+  }
+
   public render(
     renderer: THREE.WebGLRenderer,
     worldScene: THREE.Scene,
@@ -162,8 +182,11 @@ export class AsciiPostProcess {
   ): void {
     const prevTarget = renderer.getRenderTarget();
 
-    // 1. ASCII pass (grass + weather live in their own scenes, so they are
-    //    excluded here automatically).
+    this.updateGridOffset(renderer, worldCamera);
+
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
+
     renderer.setRenderTarget(this.sceneRT);
     renderer.clear(true, true, true);
     renderer.render(worldScene, worldCamera);
@@ -172,19 +195,10 @@ export class AsciiPostProcess {
     renderer.clear(true, true, true);
     renderer.render(this.postScene, this.postCamera);
 
-    // 2-4. Layer the razor-sharp overlays onto the ASCII result. Skip shadow-map
-    // re-renders (already computed in pass 1); never clear colour here.
-    const prevShadowAutoUpdate = renderer.shadowMap.autoUpdate;
     const prevOverride = worldScene.overrideMaterial;
     const prevWaterVisible = waterObject ? waterObject.visible : true;
     const prevBackground = worldScene.background;
 
-    renderer.shadowMap.autoUpdate = false;
-
-    // 2. Depth prepass: populate the screen Z-buffer with the opaque solids.
-    //    `worldScene.background` is a Color, which three.js turns into a
-    //    forceClear that wipes the colour buffer even with autoClear disabled —
-    //    null it here so only depth is written and the ASCII result survives.
     renderer.clearDepth();
     if (waterObject) waterObject.visible = false;
     worldScene.background = null;
@@ -194,16 +208,9 @@ export class AsciiPostProcess {
     worldScene.background = prevBackground;
     if (waterObject) waterObject.visible = prevWaterVisible;
 
-    // 3. Grass, depth-tested against the prepass but not writing depth.
     if (grassScene) renderer.render(grassScene, worldCamera);
-
-    // 4. Weather above the composite.
     if (weatherScene) renderer.render(weatherScene, worldCamera);
-
-    // 5. Editor overlay (collider rings) on top.
     if (overlayScene) renderer.render(overlayScene, worldCamera);
-
-    renderer.shadowMap.autoUpdate = prevShadowAutoUpdate;
 
     if (prevTarget !== null) renderer.setRenderTarget(prevTarget);
   }

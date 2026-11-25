@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { TerrainGrid } from '../core/TerrainGrid';
+import { SDF_RANGE } from '../core/TerrainGrid';
 import type { FrameContext, IRenderLayer } from '../core/types';
 
 const GROUND_VERTEX_SHADER = /* glsl */ `
@@ -14,6 +15,7 @@ const GROUND_VERTEX_SHADER = /* glsl */ `
 const GROUND_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uTerrainMap;
   uniform float uWorldSize;
+  uniform float uSdfRange;
 
   varying vec2 vWorld;
 
@@ -51,23 +53,32 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
     float riverByte = t.r * 255.0;
     if (riverByte < 128.0) discard;
 
+    float edgeDist = (riverByte - 128.0) / 128.0 * uSdfRange;
     float path = t.b;
     float blight = t.g;
 
-    // Mossy slate earth with subtle elevation contours.
     float n = fbm(vWorld * 0.38 + vec2(5.2, -3.7));
-    float bands = floor(n * 5.0);
-    float frac = fract(n * 5.0);
-    vec3 moss = vec3(0.10, 0.20, 0.16) * (0.8 + n * 0.4);
-    if (frac < 0.12) moss *= 1.15; // faint contour highlight
 
-    // Warm damp packed-earth footpath.
-    vec3 dirt = vec3(0.34, 0.23, 0.13) * (0.85 + n * 0.3);
-    vec3 col = mix(moss, dirt, smoothstep(0.55, 0.95, path));
+    // Wild/grassy ground is pure pitch black (#010202) so no grey ASCII dot
+    // static bleeds behind the grass blades.
+    vec3 col = vec3(0.004, 0.008, 0.008);
 
-    // Subtle cold blight tint where corrupted.
-    vec3 blightCol = vec3(0.08, 0.14, 0.10);
-    col = mix(col, blightCol, blight * 0.35);
+    // Subtle low-contrast dark damp-earth contour ONLY on the packed dirt
+    // footpath (path > ~0.6).
+    float pathBand = smoothstep(0.6, 0.95, path);
+    if (pathBand > 0.0) {
+      vec3 dirt = vec3(0.14, 0.10, 0.065) * (0.6 + n * 0.5);
+      col = mix(col, dirt, pathBand * 0.85);
+    }
+
+    // Immediate riverbank lips: faint damp-slate edge so the shore reads cleanly
+    // against the obsidian water, without lighting up the whole ground.
+    float bank = 1.0 - smoothstep(0.0, 2.5, edgeDist);
+    vec3 bankCol = vec3(0.05, 0.07, 0.09) * (0.7 + n * 0.5);
+    col = mix(col, bankCol, bank * 0.6);
+
+    // Cold blight tint where corrupted.
+    col = mix(col, vec3(0.04, 0.09, 0.06), blight * 0.3);
 
     gl_FragColor = vec4(col, 1.0);
   }
@@ -84,6 +95,7 @@ export class GroundLayer implements IRenderLayer {
       uniforms: {
         uTerrainMap: { value: terrain.texture },
         uWorldSize: { value: terrain.worldSize },
+        uSdfRange: { value: SDF_RANGE },
       },
       depthWrite: false,
     });

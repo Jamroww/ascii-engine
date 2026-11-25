@@ -23,6 +23,7 @@ export class Player3D {
 
   private facingAngle = 0;
   private walkPhase = 0;
+  private lastPortraitTime = -1;
 
   constructor() {
     this.model = createPlayerTravelerModel();
@@ -96,7 +97,13 @@ export class Player3D {
     this.portraitModel.position.y = bob;
   }
 
-  public renderPortrait(renderer: THREE.WebGLRenderer): void {
+  public renderPortrait(renderer: THREE.WebGLRenderer, elapsed: number): void {
+    // Throttle the offscreen portrait render + `readRenderTargetPixels` GPU
+    // readback to ~13 Hz. The synchronous readback stalls the GPU pipeline, so
+    // doing it every frame was a key source of movement stutter.
+    if (elapsed - this.lastPortraitTime < 0.075) return;
+    this.lastPortraitTime = elapsed;
+
     const prevTarget = renderer.getRenderTarget();
     const prevColor = new THREE.Color();
     renderer.getClearColor(prevColor);

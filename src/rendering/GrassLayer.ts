@@ -135,13 +135,13 @@ export class GrassLayer implements IRenderLayer {
     const tipColors = new Float32Array(count * 3);
     const phases = new Float32Array(count);
 
-    // Nocturnal emerald-teal palette: #14422a base -> #2d784e tips.
-    const BASE_R = 0x14 / 255;
-    const BASE_G = 0x42 / 255;
-    const BASE_B = 0x2a / 255;
-    const TIP_R = 0x2d / 255;
-    const TIP_G = 0x78 / 255;
-    const TIP_B = 0x4e / 255;
+    // Nocturnal emerald-teal palette: #0d3622 base -> #266e46 lit tips.
+    const BASE_R = 0x0d / 255;
+    const BASE_G = 0x36 / 255;
+    const BASE_B = 0x22 / 255;
+    const TIP_R = 0x26 / 255;
+    const TIP_G = 0x6e / 255;
+    const TIP_B = 0x46 / 255;
 
     // x, y, radius, strength per shadow footprint.
     const darkSpotUniforms = new Float32Array(MAX_DARK_SPOTS * 4);
@@ -175,10 +175,15 @@ export class GrassLayer implements IRenderLayer {
       if (terrain.getRiverSDF(x, y) < 0.25) continue;
       if (terrain.getPathMask(x, y) > 0.6) continue;
 
-      const isFlower = Math.random() < 0.015;
+      // Sparse crisp-white wildflowers, occasional muted burnt-orange leaves,
+      // and dense emerald grass.
+      const roll = Math.random();
+      const isFlower = roll < 0.018;
+      const isLeaf = !isFlower && roll < 0.026;
 
-      const heightScale = isFlower ? 0.3 + Math.random() * 0.18 : 0.8 + Math.random() * 0.5;
-      const widthScale = isFlower ? 1.6 + Math.random() * 0.8 : 0.7 + Math.random() * 0.6;
+      const isSpeck = isFlower || isLeaf;
+      const heightScale = isSpeck ? 0.26 + Math.random() * 0.18 : 0.8 + Math.random() * 0.5;
+      const widthScale = isSpeck ? 1.6 + Math.random() * 0.8 : 0.7 + Math.random() * 0.6;
 
       dummy.position.set(x, 0.01, -y);
       dummy.rotation.set(0, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.3);
@@ -189,17 +194,27 @@ export class GrassLayer implements IRenderLayer {
       phases[placed] = Math.random() * Math.PI * 2;
 
       if (isFlower) {
-        // Sparse crisp white / warm-cream wildflower specks.
-        const warm = Math.random() < 0.5;
-        const r = warm ? 0.95 : 0.94;
-        const g = warm ? 0.85 : 0.9;
-        const b = warm ? 0.6 : 0.9;
+        // Crisp white wildflower dots.
+        const r = 0.96;
+        const g = 0.96;
+        const b = 0.94;
         baseColors[placed * 3 + 0] = r;
         baseColors[placed * 3 + 1] = g;
         baseColors[placed * 3 + 2] = b;
-        tipColors[placed * 3 + 0] = Math.min(1, r + 0.03);
-        tipColors[placed * 3 + 1] = Math.min(1, g + 0.03);
-        tipColors[placed * 3 + 2] = Math.min(1, b + 0.03);
+        tipColors[placed * 3 + 0] = 1.0;
+        tipColors[placed * 3 + 1] = 1.0;
+        tipColors[placed * 3 + 2] = 0.98;
+      } else if (isLeaf) {
+        // Muted burnt-orange fallen leaves.
+        const r = 0.61;
+        const g = 0.29;
+        const b = 0.12;
+        baseColors[placed * 3 + 0] = r;
+        baseColors[placed * 3 + 1] = g;
+        baseColors[placed * 3 + 2] = b;
+        tipColors[placed * 3 + 0] = Math.min(1, r + 0.05);
+        tipColors[placed * 3 + 1] = Math.min(1, g + 0.04);
+        tipColors[placed * 3 + 2] = Math.min(1, b + 0.02);
       } else {
         const shade = 0.85 + Math.random() * 0.35;
         baseColors[placed * 3 + 0] = BASE_R * shade;

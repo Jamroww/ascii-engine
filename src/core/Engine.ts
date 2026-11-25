@@ -23,6 +23,7 @@ import type { PlacedEntity } from '../data/levelTypes';
 const HITSTOP_DURATION = 0.028;
 const SHAKE_DURATION = 0.22;
 const RESPAWN_DELAY = 0.8;
+const CAMERA_LEAN_STORAGE_KEY = 'ascii-engine.camera-lean';
 
 // Interaction + Radiant Burst tuning.
 const INTERACT_RANGE = 2.8;
@@ -35,9 +36,16 @@ const RADIANT_STUN_DURATION = 1.2;
 const RADIANT_BURST_DURATION = 2.5;
 
 // Tilted 3/4 camera framing: high above and to the south, looking down-north.
-const CAMERA_HEIGHT = 24;
-const CAMERA_BACK = 21;
-const LOOK_HEIGHT = 0.6;
+// A ~38 degree elevation (19 up / 24 back) shows front walls, doorways, warm
+// windows, porches and upright NPCs instead of mostly dark rooftops.
+const CAMERA_HEIGHT = 19;
+const CAMERA_BACK = 24;
+const LOOK_HEIGHT = 0.7;
+
+// Directional shadow map: a 64-unit-wide frustum snapped to texel increments so
+// shadows never crawl/shimmer and no frustum seam enters the viewport.
+const SHADOW_MAP_SIZE = 2048;
+const SHADOW_FRUSTUM_HALF = 32;
 
 export class Engine {
   public readonly atlas: GlyphAtlas;
@@ -76,6 +84,11 @@ export class Engine {
   private readonly hemiLight: THREE.HemisphereLight;
   private readonly lanternLight: THREE.PointLight;
 
+  // Half-res transparent target capturing the mirrored player for the water
+  // reflection (one lightweight draw call per frame).
+  private readonly playerReflectionRT: THREE.WebGLRenderTarget;
+  private readonly reflectionSize = new THREE.Vector2();
+
   // Cached raycast helpers for screen -> ground-plane picking.
   private readonly raycaster = new THREE.Raycaster();
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -87,6 +100,11 @@ export class Engine {
   public readonly playerPos = new THREE.Vector2(0, 0);
   private readonly clock = new THREE.Clock();
   private rafId: number | null = null;
+
+  // Camera lean/sway on A/D strafing, persisted and user-toggleable from the
+  // Settings tab. Defaults to OFF so movement is rock-steady out of the box.
+  private cameraLeanEnabled = this.loadCameraLeanEnabled();
+  private leanAmount = 0;
 
   // Combat feedback + respawn state.
   private hitstopTimer = 0;
@@ -143,31 +161,50 @@ export class Engine {
     this.scene.add(this.player3D.group);
     this.weapon = new Weapon(this.player3D.handPivot);
 
+    // Half-res transparent target for the exact-height player reflection.
+    this.playerReflectionRT = new THREE.WebGLRenderTarget(1, 1, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      depthBuffer: true,
+    });
+    this.resizePlayerReflection();
+
     // Real PCF soft-shadow moonlight from the south-west, tracking the player.
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Shadow maps are updated exactly once per frame, right before the main
+    // world render (AsciiPostProcess sets `needsUpdate`). Keeping autoUpdate
+    // off prevents the depth prepass and the HUD portrait from re-rendering
+    // them (a per-frame GPU cost that caused movement stutter).
+    this.renderer.shadowMap.autoUpdate = false;
 
-    this.moonLight = new THREE.DirectionalLight(0xdfe8ff, 2.6);
+    this.moonLight = new THREE.DirectionalLight(0xdce8ff, 2.7);
     this.moonLight.position.set(-16, 28, 16);
     this.moonLight.castShadow = true;
-    this.moonLight.shadow.mapSize.set(2048, 2048);
+    this.moonLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
     const shadowCam = this.moonLight.shadow.camera;
-    shadowCam.left = -28;
-    shadowCam.right = 28;
-    shadowCam.top = 28;
-    shadowCam.bottom = -28;
+    shadowCam.left = -SHADOW_FRUSTUM_HALF;
+    shadowCam.right = SHADOW_FRUSTUM_HALF;
+    shadowCam.top = SHADOW_FRUSTUM_HALF;
+    shadowCam.bottom = -SHADOW_FRUSTUM_HALF;
     shadowCam.near = 1;
     shadowCam.far = 90;
     shadowCam.updateProjectionMatrix();
-    this.moonLight.shadow.bias = -0.0004;
+    // Small negative depth bias + a normal bias keeps PCF shadows acne-free and
+    // lets the widened frustum never draw a seam through the viewport.
+    this.moonLight.shadow.bias = -0.0002;
+    this.moonLight.shadow.normalBias = 0.02;
     this.scene.add(this.moonLight);
     this.scene.add(this.moonLight.target);
 
-    this.hemiLight = new THREE.HemisphereLight(0x6a829c, 0x1a241e, 0.75);
+    // Almost no ambient fill: unlit sides of trees/rocks/buildings drop into
+    // pure black, letting the directional moonlight carve the chiaroscuro.
+    this.hemiLight = new THREE.HemisphereLight(0x7c98b8, 0x1b2822, 0.48);
     this.scene.add(this.hemiLight);
 
-    // Soft physically-decaying warm hip lantern.
-    this.lanternLight = new THREE.PointLight(0xff9933, 1.8, 7, 2);
+    // Soft, tight physically-decaying warm hip lantern (never washes the ground).
+    this.lanternLight = new THREE.PointLight(0xff9900, 1.0, 5.5, 2);
     this.lanternLight.position.set(0, 0.9, 0);
     this.scene.add(this.lanternLight);
 
@@ -176,7 +213,10 @@ export class Engine {
 
     this.hud = new Hud(container);
     this.dialogueBox = new DialogueBox(container);
-    this.inventoryModal = new InventoryModal(container, this.inventory, this.progression);
+    this.inventoryModal = new InventoryModal(container, this.inventory, this.progression, {
+      getCameraLeanEnabled: () => this.cameraLeanEnabled,
+      setCameraLeanEnabled: (enabled) => this.setCameraLeanEnabled(enabled),
+    });
 
     // The sidebar [I] button toggles the gear & quest screen.
     this.hud.setInventoryHandler(() => this.toggleInventory());
@@ -284,6 +324,29 @@ export class Engine {
     }
   }
 
+  /** Whether the camera sways/leans into A/D strafing (default: off). */
+  public getCameraLeanEnabled(): boolean {
+    return this.cameraLeanEnabled;
+  }
+
+  /** Toggle camera lean/sway live, persisting the choice to localStorage. */
+  public setCameraLeanEnabled(enabled: boolean): void {
+    this.cameraLeanEnabled = enabled;
+    try {
+      localStorage.setItem(CAMERA_LEAN_STORAGE_KEY, enabled ? 'true' : 'false');
+    } catch {
+      // Storage may be unavailable (e.g. private mode); the toggle still works.
+    }
+  }
+
+  private loadCameraLeanEnabled(): boolean {
+    try {
+      return localStorage.getItem(CAMERA_LEAN_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  }
+
   /** The WebGL canvas the editor attaches its pointer handlers to. */
   public get canvas(): HTMLCanvasElement {
     return this.renderer.domElement;
@@ -319,10 +382,12 @@ export class Engine {
 
       this.update(dt, elapsed);
 
-      this.player3D.renderPortrait(this.renderer);
+      this.player3D.renderPortrait(this.renderer, elapsed);
       for (const layer of this.layers) {
         layer.preRender?.(this.renderer);
       }
+
+      this.renderPlayerReflection();
 
       // worldScene -> sceneRT -> AsciiPostProcess -> screen, then depth-tested
       // grass, weather and the editor overlay composited on top.
@@ -352,6 +417,97 @@ export class Engine {
     this.camera.updateProjectionMatrix();
   }
 
+  /** Resize the half-res reflection target to half the drawing buffer. */
+  private resizePlayerReflection(): void {
+    this.renderer.getDrawingBufferSize(this.reflectionSize);
+    const width = Math.max(1, Math.floor(this.reflectionSize.x / 2));
+    const height = Math.max(1, Math.floor(this.reflectionSize.y / 2));
+    this.playerReflectionRT.setSize(width, height);
+  }
+
+  /**
+   * Capture only the player, mirrored across the water plane (y = -0.05), into
+   * the half-res reflection target. Exactly one extra draw call per frame.
+   */
+  private renderPlayerReflection(): void {
+    if (!this.waterObject) return;
+
+    const group = this.player3D.group;
+
+    // Hide every world object except the player and the lights so this pass
+    // captures just the character silhouette.
+    const hidden: THREE.Object3D[] = [];
+    for (const child of this.scene.children) {
+      if (child === group) continue;
+      if ((child as THREE.Light).isLight) continue;
+      if (child.visible) {
+        child.visible = false;
+        hidden.push(child);
+      }
+    }
+
+    // The mirrored mesh flips winding order, so render it double-sided to avoid
+    // hollow/inside-out culling on the cloak, hood and sword blade.
+    const sides: Array<{ material: THREE.Material; side: THREE.Side }> = [];
+    group.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const material = mesh.material;
+      if (Array.isArray(material)) {
+        for (const m of material) {
+          sides.push({ material: m, side: m.side });
+          m.side = THREE.DoubleSide;
+        }
+      } else {
+        sides.push({ material: material, side: material.side });
+        material.side = THREE.DoubleSide;
+      }
+    });
+
+    const prevScaleY = group.scale.y;
+    const prevY = group.position.y;
+    const prevShadowEnabled = this.renderer.shadowMap.enabled;
+    const prevTarget = this.renderer.getRenderTarget();
+    const prevBackground = this.scene.background;
+    const prevColor = new THREE.Color();
+    this.renderer.getClearColor(prevColor);
+    const prevAlpha = this.renderer.getClearAlpha();
+
+    // Mirror the mesh: feet land at y = -0.10 and the body extends downward by
+    // its exact height, so the reflection stays bounded to the character.
+    group.scale.y = -1;
+    group.position.y = -0.10;
+    this.renderer.shadowMap.enabled = false;
+    this.scene.background = null;
+
+    this.renderer.setRenderTarget(this.playerReflectionRT);
+    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.clear(true, true, true);
+    this.renderer.render(this.scene, this.camera);
+
+    this.renderer.setRenderTarget(prevTarget);
+    this.renderer.setClearColor(prevColor, prevAlpha);
+    this.renderer.shadowMap.enabled = prevShadowEnabled;
+    this.scene.background = prevBackground;
+
+    group.scale.y = prevScaleY;
+    group.position.y = prevY;
+    for (const s of sides) s.material.side = s.side;
+    for (const child of hidden) child.visible = true;
+
+    // Hand the fresh reflection + full-res pixel size to the water shader.
+    const mesh = this.waterObject as THREE.Mesh | null;
+    const material = mesh?.material as THREE.ShaderMaterial | undefined;
+    if (material?.uniforms) {
+      material.uniforms.uPlayerReflectionTex.value = this.playerReflectionRT.texture;
+      this.renderer.getDrawingBufferSize(this.reflectionSize);
+      (material.uniforms.uScreenResolution.value as THREE.Vector2).set(
+        this.reflectionSize.x,
+        this.reflectionSize.y,
+      );
+    }
+  }
+
   private update(dt: number, elapsed: number): void {
     const state = this.input.getState();
 
@@ -376,14 +532,14 @@ export class Engine {
       this.updateDialogue();
     } else if (this.inventoryOpen) {
       this.updateInventory();
-    } else {
-      this.input.consumeCancel();
-      if (this.editorMode) {
-        this.input.takeAttack();
-        this.panEditorCamera(dt, state);
-      } else if (this.hitstopTimer <= 0) {
-        this.updateGameplay(dt, state);
-      }
+    } else if (this.input.consumeCancel()) {
+      // Esc opens the gear/quest/settings screen when no dialogue is active.
+      this.toggleInventory();
+    } else if (this.editorMode) {
+      this.input.takeAttack();
+      this.panEditorCamera(dt, state);
+    } else if (this.hitstopTimer <= 0) {
+      this.updateGameplay(dt, state);
     }
 
     const ctx = {
@@ -549,7 +705,7 @@ export class Engine {
       this.playerPos.multiplyScalar(WORLD_BOUNDS / distFromCenter);
     }
 
-    this.updateFollowCamera(dt);
+    this.updateFollowCamera(dt, state.moveX);
 
     // Recompute aim against the settled camera for the sword + facing.
     const settled = this.computeAim(state);
@@ -615,12 +771,27 @@ export class Engine {
     return { x: world.x - this.playerPos.x, y: world.y - this.playerPos.y };
   }
 
-  /** Smoothly track the tilted camera behind the player + move the moon light. */
-  private updateFollowCamera(dt: number): void {
-    const k = Math.min(1, dt * 8);
-    this.camera.position.x += (this.playerPos.x - this.camera.position.x) * k;
-    this.camera.position.y += (CAMERA_HEIGHT - this.camera.position.y) * k;
-    this.camera.position.z += (-this.playerPos.y + CAMERA_BACK - this.camera.position.z) * k;
+  /**
+   * Track the tilted camera behind the player and move the moon light. When
+   * camera lean is enabled a subtle A/D banking/look-ahead is applied; when it
+   * is disabled (default) the camera tracks the player rigidly with zero
+   * roll/tilt/lag so movement stays rock-steady.
+   */
+  private updateFollowCamera(dt: number, moveX: number): void {
+    if (this.cameraLeanEnabled) {
+      // Damped follow with a subtle horizontal lean + look-ahead on A/D.
+      const k = Math.min(1, dt * 8);
+      this.camera.position.x += (this.playerPos.x - this.camera.position.x) * k;
+      this.camera.position.y = CAMERA_HEIGHT;
+      this.camera.position.z += (-this.playerPos.y + CAMERA_BACK - this.camera.position.z) * k;
+
+      this.leanAmount += (moveX - this.leanAmount) * Math.min(1, dt * 6);
+      this.camera.position.x += this.leanAmount * 1.4;
+    } else {
+      // Rigid, zero-lag tracking — combined with the world-locked ASCII grid
+      // this holds the scene perfectly steady.
+      this.camera.position.set(this.playerPos.x, CAMERA_HEIGHT, -this.playerPos.y + CAMERA_BACK);
+    }
 
     if (this.shakeTimer > 0) {
       const amp = this.shakeIntensity * Math.min(1, this.shakeTimer / SHAKE_DURATION);
@@ -628,11 +799,20 @@ export class Engine {
       this.camera.position.z += (Math.random() * 2 - 1) * amp;
     }
     this.camera.lookAt(this.playerPos.x, LOOK_HEIGHT, -this.playerPos.y);
+    if (this.cameraLeanEnabled) {
+      // Subtle banking roll into the strafe direction.
+      this.camera.rotateZ(this.leanAmount * -0.05);
+    }
     this.camera.updateMatrixWorld(true);
 
-    // Track the moon light + its shadow frustum cleanly across the village.
-    this.moonLight.position.set(this.playerPos.x - 16, 28, -this.playerPos.y + 16);
-    this.moonLight.target.position.set(this.playerPos.x, 0, -this.playerPos.y);
+    // Track the moon light + its shadow frustum cleanly across the village,
+    // snapping the target to shadow-map texels so shadows never crawl/shimmer
+    // as the player walks.
+    const texelSize = (SHADOW_FRUSTUM_HALF * 2) / SHADOW_MAP_SIZE;
+    const shadowX = Math.round(this.playerPos.x / texelSize) * texelSize;
+    const shadowZ = Math.round(-this.playerPos.y / texelSize) * texelSize;
+    this.moonLight.position.set(shadowX - 16, 28, shadowZ + 16);
+    this.moonLight.target.position.set(shadowX, 0, shadowZ);
     this.moonLight.target.updateMatrixWorld(true);
 
     this.lanternLight.position.set(this.playerPos.x, 0.9, -this.playerPos.y);
@@ -806,6 +986,7 @@ export class Engine {
     this.renderer.setSize(w, h);
     this.applyViewport();
     this.postProcess.setSize(this.renderer);
+    this.resizePlayerReflection();
   };
 
   public dispose(): void {
@@ -822,6 +1003,7 @@ export class Engine {
     }
     this.postProcess.dispose();
     this.atlas.dispose();
+    this.playerReflectionRT.dispose();
     this.renderer.dispose();
   }
 }

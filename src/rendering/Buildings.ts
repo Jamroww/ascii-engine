@@ -17,8 +17,8 @@ const PALETTE = {
   weatheredWood: 0x997a54,
   palePlaster: 0xdbe0e6,
   stoneHighlight: 0xc2cad2,
-  roofSlate: 0x242c37,
-  warmGlow: 0xff9900,
+  roofSlate: 0x2b3542,
+  warmGlow: 0xffaa22,
 } as const;
 
 type Vec3Tuple = readonly [number, number, number];

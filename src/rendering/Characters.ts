@@ -18,6 +18,7 @@ const PALETTE = {
   paleStone: 0xcbd2d9,
   warmIvory: 0xe6dfd3,
   brightHighlight: 0xf4f1ea,
+  cloakWhite: 0xf0f4fa,
   lanternWarm: 0xff9900,
   staffWarm: 0xffb84d,
   herbGreen: 0x48b85a,
@@ -72,7 +73,9 @@ export function createPlayerTravelerModel(): THREE.Group {
   root.name = 'player_traveler';
 
   const darkMat = createFlatMaterial(PALETTE.charcoal);
-  const cloakMat = createFlatMaterial(PALETTE.deepSlate);
+  // Crisp bright-white hooded cloak so the traveler pops instantly against the
+  // dark nocturnal world.
+  const cloakMat = createFlatMaterial(PALETTE.cloakWhite);
   const mantleMat = createFlatMaterial(PALETTE.paleStone);
   const leatherMat = createFlatMaterial(PALETTE.warmUmber);
   const lanternGlowMat = createEmissiveMaterial(PALETTE.lanternWarm, PALETTE.lanternWarm);
@@ -105,8 +108,8 @@ export function createPlayerTravelerModel(): THREE.Group {
 
   // Shadowed face recess + oversized pointed hood
   addPart(root, new THREE.SphereGeometry(0.18, 7, 6), darkMat, [0, 1.56, 0.08]);
-  addPart(root, new THREE.ConeGeometry(0.32, 0.54, 7), mantleMat, [0, 1.66, -0.04], [-0.28, 0, 0]);
-  addPart(root, new THREE.CylinderGeometry(0.24, 0.3, 0.24, 7), mantleMat, [0, 1.5, 0.02]);
+  addPart(root, new THREE.ConeGeometry(0.32, 0.54, 7), cloakMat, [0, 1.66, -0.04], [-0.28, 0, 0]);
+  addPart(root, new THREE.CylinderGeometry(0.24, 0.3, 0.24, 7), cloakMat, [0, 1.5, 0.02]);
 
   // Thick waist belt
   addPart(root, new THREE.CylinderGeometry(0.35, 0.36, 0.14, 8), leatherMat, [0, 0.88, 0]);

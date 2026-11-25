@@ -1,13 +1,10 @@
 import * as THREE from 'three';
 import type { GlyphAtlasConfig } from '../core/types';
 
-// Curated ~64-character visual-density ramp, ordered lightest -> densest so the
-// screen-space post-process can map perceptual luminance straight onto the atlas.
-// Lightest:  . ' ` , : ; - ~
-// Mid:        ^ " _ + = i ! l I / \ | ( ) [ ] r c v u n x z j f t
-// Densest:    o a h k b d p q w m Z O 0 Q L C J U Y X * # M W & 8 % B @ $
-export const DEFAULT_CHARSET =
-  ". ' ` , : ; - ~ ^ \" _ + = i ! l I / \\ | ( ) [ ] r c v u n x z j f t o a h k b d p q w m Z O 0 Q L C J U Y X * # M W & 8 % B @ $";
+// Tight sculptural density ramp, ordered lightest -> densest so the screen-space
+// post-process can map perceptual luminance straight onto the atlas. Free of
+// noisy punctuation static: rounded/engraved forms pack together like a woodcut.
+export const DEFAULT_CHARSET = " .:-=+*rcunxzoO0Q8%#MW@$";
 
 export class GlyphAtlas {
   public readonly texture: THREE.CanvasTexture;
@@ -37,9 +34,9 @@ export class GlyphAtlas {
     // Transparent background, pure white glyphs (tinted dynamically in shaders).
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#ffffff';
-    // ~92% of the cell so dense glyphs (@ # % 8 $ = W M) pack edge-to-edge with
-    // zero dead margin, tiling into a tightly packed halftone/engraving texture.
-    ctx.font = `bold ${Math.floor(cellSize * 0.92)}px ${fontFamily}`;
+    // ~87.5% of the cell leaves a clean 2px transparent gutter around every tile
+    // so adjacent glyphs never bleed/flicker at cell borders with NearestFilter.
+    ctx.font = `bold ${Math.floor(cellSize * 0.875)}px ${fontFamily}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
