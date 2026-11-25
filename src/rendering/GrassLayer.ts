@@ -22,29 +22,25 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
     vGlyphIndex = aGlyphIndex;
     vColor = aColor;
 
-    // Extract blade base position from the instance matrix
-    vec4 baseWorld = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
-    vWorldPos = baseWorld.xy;
+    // Blade base position (mesh-local) converted back into gameplay (x, y).
+    vec4 baseLocal = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+    vec4 baseWorld = modelMatrix * baseLocal;
+    vWorldPos = vec2(baseWorld.x, -baseWorld.z);
 
-    // Only bend the top of the glyph (uv.y = 0 at roots, 1 at tips)
     float tipWeight = uv.y;
 
-    // 1. Rolling wind wave across the field
-    float windWave = sin(uTime * 2.2 + baseWorld.x * 0.35 + baseWorld.y * 0.2 + aPhase);
-    float windGust = sin(uTime * 0.9 + baseWorld.x * 0.12) * 0.5 + 0.5;
+    float windWave = sin(uTime * 2.2 + vWorldPos.x * 0.35 + vWorldPos.y * 0.2 + aPhase);
+    float windGust = sin(uTime * 0.9 + vWorldPos.x * 0.12) * 0.5 + 0.5;
     float swayX = windWave * (0.14 + windGust * 0.12) * tipWeight;
 
-    // 2. Radial push away from the player's feet
-    vec2 toBlade = baseWorld.xy - uPlayerPos;
+    vec2 toBlade = vWorldPos - uPlayerPos;
     float dist = length(toBlade);
     float pushRadius = 2.6;
     float pushStrength = smoothstep(pushRadius, 0.2, dist);
     vec2 pushDir = dist > 0.001 ? normalize(toBlade) : vec2(1.0, 0.0);
-
     vec2 playerBend = pushDir * pushStrength * 0.85 * tipWeight;
     vBend = pushStrength;
 
-    // Apply local vertex position + wind + player push
     vec3 displaced = position;
     displaced.x += swayX + playerBend.x;
     displaced.y += playerBend.y * 0.5 - pushStrength * 0.18 * tipWeight;
@@ -78,17 +74,13 @@ const GRASS_FRAGMENT_SHADER = /* glsl */ `
     float alpha = texture2D(uAtlas, atlasUv).a;
     if (alpha < 0.15) discard;
 
-    // Gentle tip highlight so dense grass reads with depth (not bright streaks).
     float tipGlow = mix(0.86, 1.04, vUv.y);
-
-    // Even moonlit visibility across the whole carpet; the lantern is only a
-    // subtle warm accent hugging the traveler, never the sole light source.
     vec3 base = vColor * tipGlow;
+
     float dist = distance(vWorldPos, uPlayerPos);
     float warm = smoothstep(6.0, 0.4, dist);
-    base += vec3(0.16, 0.10, 0.03) * warm * 0.5;
+    base += vec3(0.16, 0.1, 0.03) * warm * 0.5;
 
-    // Dark radial depression under the player's feet so the traveler pops.
     float footDist = distance(vWorldPos, uPlayerPos);
     float depression = smoothstep(1.7, 0.15, footDist) * 0.28;
     float shadow = (1.0 - vBend * 0.22) * (1.0 - depression);
@@ -129,9 +121,10 @@ export class GrassLayer implements IRenderLayer {
     });
 
     this.mesh = new THREE.InstancedMesh(geometry, this.material, count);
+    // Lay the whole blade field flat on the ground (Pass 2 upgrades this to a
+    // crisp depth-tested post-ASCII grass pass).
+    this.mesh.rotation.x = -Math.PI / 2;
 
-    // Scatter blades organically across the field. Blades that fall on the
-    // dirt footpath are mostly rerolled elsewhere so the path stays clear.
     let i = 0;
     while (i < count) {
       const x = (Math.random() - 0.5) * areaSize;
@@ -140,11 +133,8 @@ export class GrassLayer implements IRenderLayer {
       const onPath = terrain.getPathMask(x, y) > 0.6;
       if (onPath && Math.random() < 0.8) continue;
 
-      // Slight Z jitter so overlapping blades don't z-fight (0.2..0.45)
-      const z = 0.2 + Math.random() * 0.25;
-
       const scale = 0.8 + Math.random() * 0.5;
-      dummy.position.set(x, y, z);
+      dummy.position.set(x, y, 0.02);
       dummy.scale.set(scale, scale, 1);
       dummy.updateMatrix();
       this.mesh.setMatrixAt(i, dummy.matrix);
@@ -153,19 +143,16 @@ export class GrassLayer implements IRenderLayer {
 
       const roll = Math.random();
       if (roll < 0.012) {
-        // Sparse warm-cream wildflower pinpoint.
         glyphIndices[i] = atlas.getIndex(Math.random() < 0.5 ? '*' : 'o');
         colors[i * 3 + 0] = 0.94;
         colors[i * 3 + 1] = 0.82;
         colors[i * 3 + 2] = 0.58;
       } else if (roll < 0.025) {
-        // Sparse pale-white dewdrop glint.
         glyphIndices[i] = atlas.getIndex('.');
         colors[i * 3 + 0] = 0.86;
         colors[i * 3 + 1] = 0.92;
         colors[i * 3 + 2] = 0.98;
       } else {
-        // Lush, evenly readable deep pine / emerald-teal blades.
         const char = bladeChars[Math.floor(Math.random() * bladeChars.length)];
         glyphIndices[i] = atlas.getIndex(char);
         const shade = 0.75 + Math.random() * 0.5;

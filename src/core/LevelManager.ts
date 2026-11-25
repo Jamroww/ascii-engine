@@ -3,24 +3,21 @@ import type { Engine } from './Engine';
 import { GroundLayer } from '../rendering/GroundLayer';
 import { GrassLayer } from '../rendering/GrassLayer';
 import { WaterLayer } from '../rendering/WaterLayer';
-import type { WaterLight } from '../rendering/WaterLayer';
 import { ForestLayer, generateRiversideForest } from '../rendering/ForestLayer';
 import type { TreePlacement } from '../rendering/ForestLayer';
 import { BuildingLayer } from '../rendering/BuildingLayer';
 import type { BuildingPlacement } from '../rendering/BuildingLayer';
-import { ModelBillboardLayer } from '../rendering/ModelBillboardLayer';
-import type { ModelBillboardPlacement } from '../rendering/ModelBillboardLayer';
+import { WorldModelsLayer } from '../rendering/WorldModelsLayer';
+import type { WorldModelPlacement } from '../rendering/WorldModelsLayer';
 import { AssetRegistry } from '../data/AssetRegistry';
 import type { LevelData, PlacedEntity } from '../data/levelTypes';
 import { BOULDERS } from './world';
 
-const WATER_AREA_SIZE = 140;
-
 /**
  * Owns the active level: its `LevelData`, `TerrainGrid`, and the world layers
- * (ground, grass, water, perimeter forest, legacy ASCII buildings, and the
- * unified 3D-baked model billboard). It builds layers from serialized data and
- * keeps the CollisionSystem in sync with every placed entity.
+ * (3D ground, grass, water, perimeter forest, legacy ASCII buildings, and the
+ * unified real-3D model layer). It builds layers from serialized data and keeps
+ * the CollisionSystem in sync with every placed entity.
  */
 export class LevelManager {
   private data!: LevelData;
@@ -32,7 +29,7 @@ export class LevelManager {
   private water: WaterLayer | null = null;
   private forest: ForestLayer | null = null;
   private building: BuildingLayer | null = null;
-  private billboard: ModelBillboardLayer | null = null;
+  private worldModels: WorldModelsLayer | null = null;
 
   constructor(engine: Engine) {
     this.engine = engine;
@@ -98,7 +95,7 @@ export class LevelManager {
   /** NPCs, poison nodes and light shrines the player can interact with. */
   public getInteractableEntities(): PlacedEntity[] {
     return this.data.entities.filter(
-      (e) => e.kind === 'npc' || e.kind === 'node' || e.kind === 'shrine'
+      (e) => e.kind === 'npc' || e.kind === 'node' || e.kind === 'shrine',
     );
   }
 
@@ -106,12 +103,12 @@ export class LevelManager {
   public absorbPoisonNode(id: string): void {
     const entity = this.data.entities.find((e) => e.id === id);
     if (!entity || entity.kind !== 'node') return;
-    this.billboard?.setPoisonNodeAbsorbed(id, true);
+    this.worldModels?.setPoisonNodeAbsorbed(id, true);
   }
 
-  /** Brighten the halo of the nearest in-range interactable (or clear it). */
+  /** Brighten the glow of the nearest in-range interactable (or clear it). */
   public setInteractableHighlight(entityId: string | null): void {
-    this.billboard?.setInteractableHighlight(entityId);
+    this.worldModels?.setInteractableHighlight(entityId);
   }
 
   /** Ignite a light shrine in warm gold after the player purifies it. */
@@ -132,8 +129,7 @@ export class LevelManager {
     this.rebuildGroundAndGrass();
     this.rebuildForest();
     this.rebuildBuilding();
-    this.rebuildBillboard();
-    this.wireWaterLights();
+    this.rebuildWorldModels();
     this.rebuildColliders();
     this.rebuildEnemies();
   }
@@ -165,10 +161,7 @@ export class LevelManager {
     const entity = this.data.entities.find((e) => e.id === id);
     if (!entity || entity.kind !== 'shrine') return;
     entity.purified = purified;
-    if (this.billboard) {
-      this.billboard.setLightShrinePurified(id, purified);
-      this.wireWaterLights();
-    }
+    this.worldModels?.setLightShrinePurified(id, purified);
   }
 
   /** Rebuild the layers that bake terrain into their geometry after a brush stroke. */
@@ -194,11 +187,10 @@ export class LevelManager {
     if (entity.kind === 'enemy') {
       this.rebuildEnemies();
     } else {
-      // Rebuild whichever layer owns this entity, then refresh water + colliders.
-      this.rebuildBillboard();
+      // Rebuild whichever layer owns this entity, then refresh colliders.
+      this.rebuildWorldModels();
       this.rebuildForest();
       this.rebuildBuilding();
-      this.wireWaterLights();
     }
     this.rebuildColliders();
   }
@@ -213,7 +205,7 @@ export class LevelManager {
       this.engine.removeLayer(this.water);
       this.water.dispose();
     }
-    this.water = new WaterLayer(this.engine.atlas, this.terrain, WATER_AREA_SIZE);
+    this.water = new WaterLayer(this.terrain);
     this.engine.addLayer(this.water);
   }
 
@@ -226,7 +218,7 @@ export class LevelManager {
       this.engine.removeLayer(this.grass);
       this.grass.dispose();
     }
-    this.ground = new GroundLayer(this.engine.atlas, this.terrain);
+    this.ground = new GroundLayer(this.terrain);
     this.grass = new GrassLayer(this.engine.atlas, this.terrain);
     this.engine.addLayer(this.ground);
     this.engine.addLayer(this.grass);
@@ -237,7 +229,7 @@ export class LevelManager {
     if (this.forest) {
       this.forest.rebuild(placements);
     } else {
-      this.forest = new ForestLayer(this.engine.atlas, placements);
+      this.forest = new ForestLayer(placements);
       this.engine.addLayer(this.forest);
     }
   }
@@ -252,29 +244,21 @@ export class LevelManager {
     }
   }
 
-  private rebuildBillboard(): void {
-    const placements = this.buildBillboardPlacements();
-    if (this.billboard) {
-      this.billboard.rebuild(placements);
+  private rebuildWorldModels(): void {
+    const placements = this.buildWorldModelPlacements();
+    if (this.worldModels) {
+      this.worldModels.rebuild(placements);
     } else {
-      this.billboard = new ModelBillboardLayer(this.engine.atlas, this.engine.baker, placements);
-      this.engine.addLayer(this.billboard);
+      this.worldModels = new WorldModelsLayer(placements);
+      this.engine.addLayer(this.worldModels);
     }
-  }
-
-  private wireWaterLights(): void {
-    if (!this.water) return;
-    const lights: WaterLight[] = [];
-    if (this.building) lights.push(...this.building.getWaterLights());
-    if (this.billboard) lights.push(...this.billboard.getWaterLights());
-    this.water.setLights(lights);
   }
 
   private rebuildColliders(): void {
     this.engine.collision.clear();
     if (this.forest) this.engine.collision.addMany(this.forest.getColliders());
     if (this.building) this.engine.collision.addMany(this.building.getColliders());
-    if (this.billboard) this.engine.collision.addMany(this.billboard.getColliders());
+    if (this.worldModels) this.engine.collision.addMany(this.worldModels.getColliders());
     // Legacy WaterLayer-rendered boulders (river_boulder) still need colliders.
     for (const e of this.data.entities) {
       if (e.kind !== 'boulder') continue;
@@ -289,7 +273,7 @@ export class LevelManager {
     const manual: TreePlacement[] = [];
     for (const e of this.data.entities) {
       if (e.kind !== 'tree') continue;
-      if (AssetRegistry.isModelAsset(e.assetId)) continue; // 3D hero trees -> billboard
+      if (AssetRegistry.isModelAsset(e.assetId)) continue; // 3D hero trees -> world models
       const asset = AssetRegistry.getTreeAsset(e.assetId);
       manual.push({ kind: asset.kind, worldX: e.x, worldY: e.y, scale: 1.0 });
     }
@@ -300,7 +284,7 @@ export class LevelManager {
     const placements: BuildingPlacement[] = [];
     for (const e of this.data.entities) {
       if (e.kind !== 'building') continue;
-      if (AssetRegistry.isModelAsset(e.assetId)) continue; // 3D buildings -> billboard
+      if (AssetRegistry.isModelAsset(e.assetId)) continue; // 3D buildings -> world models
       placements.push({
         asset: AssetRegistry.getBuildingAsset(e.assetId),
         worldX: e.x,
@@ -310,24 +294,23 @@ export class LevelManager {
     return placements;
   }
 
-  private buildBillboardPlacements(): ModelBillboardPlacement[] {
-    const placements: ModelBillboardPlacement[] = [];
+  private buildWorldModelPlacements(): WorldModelPlacement[] {
+    const placements: WorldModelPlacement[] = [];
     for (const e of this.data.entities) {
       if (e.kind === 'enemy') continue; // enemies are owned by EnemyManager
       if (!AssetRegistry.isModelAsset(e.assetId)) continue;
-      const purified = e.purified ?? false;
-      const bakeKey = e.assetId === 'light_shrine' && purified ? 'light_shrine:purified' : e.assetId;
       placements.push({
         id: e.id,
         kind: e.kind,
-        bakeKey,
-        createModel: (p = false) => AssetRegistry.getModel(e.assetId, p),
-        purified,
+        assetId: e.assetId,
+        purified: e.purified ?? false,
         x: e.x,
         y: e.y,
         radius: e.radius ?? AssetRegistry.getModelRadius(e.assetId),
         colliders:
-          e.radius === undefined ? (AssetRegistry.getModelColliders(e.assetId) ?? undefined) : undefined,
+          e.radius === undefined
+            ? (AssetRegistry.getModelColliders(e.assetId) ?? undefined)
+            : undefined,
       });
     }
     return placements;

@@ -6,10 +6,10 @@ import { PlayerStats } from './PlayerStats';
 import { EnemyManager } from './EnemyManager';
 import { ProgressionSystem } from './ProgressionSystem';
 import { GlyphAtlas } from '../rendering/GlyphAtlas';
-import { AsciiCharPass } from '../rendering/AsciiCharPass';
-import { AsciiModelBaker } from '../rendering/AsciiModelBaker';
-import { AtmosphereLayer } from '../rendering/AtmosphereLayer';
+import { AsciiPostProcess } from '../rendering/AsciiPostProcess';
+import { Player3D } from '../rendering/Player3D';
 import { Weapon } from '../rendering/Weapon';
+import type { WeaponAssetId } from '../rendering/Weapons';
 import { EnemyLayer } from '../rendering/EnemyLayer';
 import { Hud } from '../ui/Hud';
 import { DialogueBox } from '../ui/DialogueBox';
@@ -32,13 +32,17 @@ const RADIANT_DAMAGE = 15;
 const RADIANT_STAMINA = 25;
 const RADIANT_HEAL = 25;
 const RADIANT_STUN_DURATION = 1.2;
+const RADIANT_BURST_DURATION = 2.5;
+
+// Tilted 3/4 camera framing: high above and to the south, looking down-north.
+const CAMERA_HEIGHT = 24;
+const CAMERA_BACK = 21;
+const LOOK_HEIGHT = 0.6;
 
 export class Engine {
   public readonly atlas: GlyphAtlas;
   public readonly collision = new CollisionSystem();
   public readonly scene: THREE.Scene;
-  /** Shared offscreen bake rig used by the enemy and model-billboard layers. */
-  public readonly baker = new AsciiModelBaker();
 
   private readonly container: HTMLElement;
   private readonly renderer: THREE.WebGLRenderer;
@@ -47,9 +51,9 @@ export class Engine {
   private terrain: TerrainGrid | null = null;
   private levelManager: LevelManager | null = null;
 
-  private readonly character: AsciiCharPass;
+  private readonly player3D: Player3D;
   public readonly weapon: Weapon;
-  private readonly atmosphere: AtmosphereLayer;
+  private readonly postProcess: AsciiPostProcess;
   private readonly hud: Hud;
   private readonly dialogueBox: DialogueBox;
   private readonly inventoryModal: InventoryModal;
@@ -59,7 +63,18 @@ export class Engine {
   public readonly inventory = new InventorySystem();
   private readonly layers: IRenderLayer[] = [];
 
-  private viewHeight = 28;
+  // Nocturnal lighting rig.
+  private readonly moonLight: THREE.DirectionalLight;
+  private readonly hemiLight: THREE.HemisphereLight;
+  private readonly lanternLight: THREE.PointLight;
+
+  // Cached raycast helpers for screen -> ground-plane picking.
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private readonly ndcVec = new THREE.Vector2();
+  private readonly hitVec = new THREE.Vector3();
+
+  private viewHeight = 26;
   private editorMode = false;
   public readonly playerPos = new THREE.Vector2(0, 0);
   private readonly clock = new THREE.Clock();
@@ -79,6 +94,7 @@ export class Engine {
   private dashDirX = 0;
   private dashDirY = 0;
   private radiantCooldown = 0;
+  private radiantBurstTimer = 0;
   private dialogueOpen = false;
   private inventoryOpen = false;
   private currentInteract: PlacedEntity | null = null;
@@ -89,10 +105,11 @@ export class Engine {
     this.renderer = new THREE.WebGLRenderer({ antialias: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.renderer.setClearColor(0x000000, 1);
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#050709');
+    this.scene.background = new THREE.Color('#000000');
 
     const aspect = container.clientWidth / container.clientHeight;
     this.camera = new THREE.OrthographicCamera(
@@ -101,24 +118,50 @@ export class Engine {
       this.viewHeight / 2,
       -this.viewHeight / 2,
       0.1,
-      100
+      100,
     );
-    this.camera.position.set(0, 0, 10);
+    this.camera.position.set(0, CAMERA_HEIGHT, CAMERA_BACK);
+    this.camera.lookAt(0, LOOK_HEIGHT, 0);
 
     this.input = new InputManager(container);
     this.atlas = new GlyphAtlas();
 
-    this.character = new AsciiCharPass(this.atlas);
-    this.scene.add(this.character.group);
+    this.postProcess = new AsciiPostProcess(this.atlas);
 
-    this.weapon = new Weapon(this.atlas);
-    this.scene.add(this.weapon.object3D);
+    this.player3D = new Player3D();
+    this.scene.add(this.player3D.group);
+    this.weapon = new Weapon(this.player3D.handPivot);
+
+    // Real PCF soft-shadow moonlight from the south-west, tracking the player.
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    this.moonLight = new THREE.DirectionalLight(0xdfe8ff, 2.2);
+    this.moonLight.position.set(-16, 28, 16);
+    this.moonLight.castShadow = true;
+    this.moonLight.shadow.mapSize.set(2048, 2048);
+    const shadowCam = this.moonLight.shadow.camera;
+    shadowCam.left = -28;
+    shadowCam.right = 28;
+    shadowCam.top = 28;
+    shadowCam.bottom = -28;
+    shadowCam.near = 1;
+    shadowCam.far = 90;
+    shadowCam.updateProjectionMatrix();
+    this.moonLight.shadow.bias = -0.0004;
+    this.scene.add(this.moonLight);
+    this.scene.add(this.moonLight.target);
+
+    this.hemiLight = new THREE.HemisphereLight(0x6a829c, 0x1a241e, 0.45);
+    this.scene.add(this.hemiLight);
+
+    // Soft physically-decaying warm hip lantern.
+    this.lanternLight = new THREE.PointLight(0xff9933, 1.8, 7, 2);
+    this.lanternLight.position.set(0, 0.9, 0);
+    this.scene.add(this.lanternLight);
 
     this.enemies = new EnemyManager(this);
-    this.addLayer(new EnemyLayer(this.atlas, this.enemies, this.baker));
-
-    this.atmosphere = new AtmosphereLayer();
-    this.scene.add(this.atmosphere.object3D);
+    this.addLayer(new EnemyLayer(this.enemies));
 
     this.hud = new Hud(container);
     this.dialogueBox = new DialogueBox(container);
@@ -131,6 +174,8 @@ export class Engine {
     this.progression.setHealHandler((amount) => this.stats.heal(amount));
 
     this.applyViewport();
+    this.postProcess.setSize(this.renderer.domElement.width, this.renderer.domElement.height);
+    this.camera.updateMatrixWorld(true);
     window.addEventListener('resize', this.onResize);
   }
 
@@ -147,7 +192,6 @@ export class Engine {
 
   public setTerrain(terrain: TerrainGrid): void {
     this.terrain = terrain;
-    this.atmosphere.setTerrain(terrain);
   }
 
   public setLevelManager(levelManager: LevelManager): void {
@@ -190,6 +234,7 @@ export class Engine {
     this.respawnTimer = 0;
     this.stats.reset();
     this.radiantCooldown = 0;
+    this.radiantBurstTimer = 0;
     this.currentInteract = null;
     if (this.dialogueBox.isOpen) {
       this.dialogueBox.close();
@@ -219,18 +264,25 @@ export class Engine {
     return this.renderer.domElement;
   }
 
-  /** Convert pointer client coordinates into world-space (x, y) on the z = 0 plane. */
+  /** Convert pointer client coordinates into world-space (x, y) on the Y = 0 plane. */
   public screenToWorld(clientX: number, clientY: number): { x: number; y: number } {
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) {
-      return { x: this.camera.position.x, y: this.camera.position.y };
+      return { x: this.playerPos.x, y: this.playerPos.y };
     }
     const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = -(((clientY - rect.top) / rect.height) * 2 - 1);
-    return {
-      x: this.camera.position.x + ndcX * this.camera.right,
-      y: this.camera.position.y + ndcY * this.camera.top,
-    };
+    return this.ndcToWorld(ndcX, ndcY);
+  }
+
+  /** Raycast a normalised-device point through the tilted camera onto Y = 0. */
+  private ndcToWorld(ndcX: number, ndcY: number): { x: number; y: number } {
+    this.ndcVec.set(ndcX, ndcY);
+    this.raycaster.setFromCamera(this.ndcVec, this.camera);
+    if (this.raycaster.ray.intersectPlane(this.groundPlane, this.hitVec)) {
+      return { x: this.hitVec.x, y: -this.hitVec.z };
+    }
+    return { x: this.playerPos.x, y: this.playerPos.y };
   }
 
   public start(): void {
@@ -242,12 +294,13 @@ export class Engine {
 
       this.update(dt, elapsed);
 
-      this.character.render(this.renderer);
+      this.player3D.renderPortrait(this.renderer);
       for (const layer of this.layers) {
         layer.preRender?.(this.renderer);
       }
 
-      this.renderer.render(this.scene, this.camera);
+      // worldScene -> sceneRT -> AsciiPostProcess -> screen.
+      this.postProcess.render(this.renderer, this.scene, this.camera);
     };
     tick();
   }
@@ -263,7 +316,6 @@ export class Engine {
     this.camera.top = this.viewHeight / 2;
     this.camera.bottom = -this.viewHeight / 2;
     this.camera.updateProjectionMatrix();
-    this.atmosphere.setViewport(this.viewHeight * aspect, this.viewHeight);
   }
 
   private update(dt: number, elapsed: number): void {
@@ -272,13 +324,14 @@ export class Engine {
     // Camera zoom (scroll in / out), paused while a modal is open.
     const wheel = this.input.takeWheelDelta();
     if (wheel !== 0 && !this.dialogueOpen && !this.inventoryOpen) {
-      this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 22, 38);
+      this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 18, 36);
       this.applyViewport();
     }
 
     // Combat feedback timers decay on wall-clock time even while hitstop holds.
     this.hitstopTimer = Math.max(0, this.hitstopTimer - dt);
     this.shakeTimer = Math.max(0, this.shakeTimer - dt);
+    this.radiantBurstTimer = Math.max(0, this.radiantBurstTimer - dt);
 
     // I / Tab toggles the inventory & quest screen.
     if (this.input.consumeInventory()) {
@@ -308,10 +361,15 @@ export class Engine {
       virtue: this.progression.virtue / 100,
     };
 
-    this.atmosphere.update(ctx);
     for (const layer of this.layers) {
       layer.update(ctx);
     }
+
+    const burst =
+      this.radiantBurstTimer > 0
+        ? Math.pow(this.radiantBurstTimer / RADIANT_BURST_DURATION, 1.5)
+        : 0;
+    this.postProcess.setBurstGlow(burst);
   }
 
   /** Modal dialogue: freeze the world and route E / Space / click to advance. */
@@ -390,6 +448,7 @@ export class Engine {
     this.stats.applyEquipment(combat.bonusMaxHp, combat.bonusMaxStamina, combat.damageReduction);
     this.weapon.setCombat(combat.reach, combat.arcHalfAngle);
     this.weapon.setTint(combat.weaponTint.r, combat.weaponTint.g, combat.weaponTint.b);
+    this.weapon.setWeaponAsset(`weapon_${this.inventory.equippedWeaponId}` as WeaponAssetId);
     this.enemies.swordDamage = combat.swordDamage;
 
     // Sword swings: left click only.
@@ -456,15 +515,14 @@ export class Engine {
       this.playerPos.multiplyScalar(WORLD_BOUNDS / distFromCenter);
     }
 
-    this.camera.position.x += (this.playerPos.x - this.camera.position.x) * Math.min(1, dt * 8);
-    this.camera.position.y += (this.playerPos.y - this.camera.position.y) * Math.min(1, dt * 8);
+    this.updateFollowCamera(dt);
 
     // Recompute aim against the settled camera for the sword + facing.
     const settled = this.computeAim(state);
     aimX = settled.x;
     aimY = settled.y;
 
-    this.character.update(
+    this.player3D.update(
       dt,
       state.moveX,
       state.moveY,
@@ -474,19 +532,12 @@ export class Engine {
       aimY,
       this.playerPos.x,
       this.playerPos.y,
-      this.stats.isDashing
+      this.stats.isDashing,
     );
     this.weapon.update(dt, aimX, aimY, this.playerPos.x, this.playerPos.y);
 
     // Enemy AI, sword/enemy hits and projectiles.
     this.enemies.update(dt);
-
-    // Subtle camera shake (applied last so a hit this frame is felt immediately).
-    if (this.shakeTimer > 0) {
-      const amp = this.shakeIntensity * Math.min(1, this.shakeTimer / SHAKE_DURATION);
-      this.camera.position.x += (Math.random() * 2 - 1) * amp;
-      this.camera.position.y += (Math.random() * 2 - 1) * amp;
-    }
 
     // Register death once, then hand off to the respawn pause.
     if (this.stats.isDead) {
@@ -521,16 +572,36 @@ export class Engine {
       radiantCooldownFraction: this.radiantCooldown > 0 ? this.radiantCooldown / RADIANT_COOLDOWN : 0,
       radiantCooldownSeconds: this.radiantCooldown,
     });
-    this.hud.drawPortrait(this.character.getPortraitPixels());
+    this.hud.drawPortrait(this.player3D.getPortraitPixels());
   }
 
   /** Aim vector from the mouse cursor (world space), relative to the player. */
   private computeAim(state: InputState): { x: number; y: number } {
-    const viewW = this.viewHeight * this.aspect;
-    const viewH = this.viewHeight;
-    const mouseX = this.camera.position.x + (state.mouseNdc.x * viewW) / 2;
-    const mouseY = this.camera.position.y + (state.mouseNdc.y * viewH) / 2;
-    return { x: mouseX - this.playerPos.x, y: mouseY - this.playerPos.y };
+    const world = this.ndcToWorld(state.mouseNdc.x, state.mouseNdc.y);
+    return { x: world.x - this.playerPos.x, y: world.y - this.playerPos.y };
+  }
+
+  /** Smoothly track the tilted camera behind the player + move the moon light. */
+  private updateFollowCamera(dt: number): void {
+    const k = Math.min(1, dt * 8);
+    this.camera.position.x += (this.playerPos.x - this.camera.position.x) * k;
+    this.camera.position.y += (CAMERA_HEIGHT - this.camera.position.y) * k;
+    this.camera.position.z += (-this.playerPos.y + CAMERA_BACK - this.camera.position.z) * k;
+
+    if (this.shakeTimer > 0) {
+      const amp = this.shakeIntensity * Math.min(1, this.shakeTimer / SHAKE_DURATION);
+      this.camera.position.x += (Math.random() * 2 - 1) * amp;
+      this.camera.position.z += (Math.random() * 2 - 1) * amp;
+    }
+    this.camera.lookAt(this.playerPos.x, LOOK_HEIGHT, -this.playerPos.y);
+    this.camera.updateMatrixWorld(true);
+
+    // Track the moon light + its shadow frustum cleanly across the village.
+    this.moonLight.position.set(this.playerPos.x - 16, 28, -this.playerPos.y + 16);
+    this.moonLight.target.position.set(this.playerPos.x, 0, -this.playerPos.y);
+    this.moonLight.target.updateMatrixWorld(true);
+
+    this.lanternLight.position.set(this.playerPos.x, 0.9, -this.playerPos.y);
   }
 
   /** Start a dash in the current WASD direction (or toward the mouse if still). */
@@ -562,7 +633,7 @@ export class Engine {
     this.dashDirY = dy;
   }
 
-  /** Radiant Burst: heal, stun + damage nearby enemies, flare the atmosphere. */
+  /** Radiant Burst: heal, stun + damage nearby enemies, flare the post-process. */
   private tryRadiantBurst(): void {
     if (this.radiantCooldown > 0) return;
     if (this.progression.virtue < 25) return;
@@ -575,9 +646,9 @@ export class Engine {
       this.playerPos.y,
       RADIANT_RADIUS,
       RADIANT_DAMAGE,
-      RADIANT_STUN_DURATION
+      RADIANT_STUN_DURATION,
     );
-    this.atmosphere.triggerBurst();
+    this.radiantBurstTimer = RADIANT_BURST_DURATION;
     this.hud.showToast('Radiant Burst!');
   }
 
@@ -678,17 +749,21 @@ export class Engine {
     this.playerPos.set(this.spawnPoint.x, this.spawnPoint.y);
     this.knockbackX = 0;
     this.knockbackY = 0;
-    this.camera.position.set(this.spawnPoint.x, this.spawnPoint.y, this.camera.position.z);
+    this.camera.position.set(this.spawnPoint.x, CAMERA_HEIGHT, -this.spawnPoint.y + CAMERA_BACK);
+    this.camera.lookAt(this.spawnPoint.x, LOOK_HEIGHT, -this.spawnPoint.y);
+    this.camera.updateMatrixWorld(true);
   }
 
-  /** WASD/arrow panning across the full ±30 world while the editor is active. */
+  /** WASD/arrow panning across the world while the editor is active. */
   private panEditorCamera(dt: number, state: InputState): void {
     const panSpeed = 16;
     this.camera.position.x += state.moveX * panSpeed * dt;
-    this.camera.position.y += state.moveY * panSpeed * dt;
+    this.camera.position.z -= state.moveY * panSpeed * dt;
     const limit = 30;
     this.camera.position.x = THREE.MathUtils.clamp(this.camera.position.x, -limit, limit);
-    this.camera.position.y = THREE.MathUtils.clamp(this.camera.position.y, -limit, limit);
+    this.camera.position.z = THREE.MathUtils.clamp(this.camera.position.z, -limit, limit);
+    this.camera.lookAt(this.camera.position.x, LOOK_HEIGHT, this.camera.position.z - CAMERA_BACK);
+    this.camera.updateMatrixWorld(true);
   }
 
   private onResize = (): void => {
@@ -696,22 +771,22 @@ export class Engine {
     const h = this.container.clientHeight;
     this.renderer.setSize(w, h);
     this.applyViewport();
+    this.postProcess.setSize(this.renderer.domElement.width, this.renderer.domElement.height);
   };
 
   public dispose(): void {
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
     window.removeEventListener('resize', this.onResize);
     this.input.dispose();
-    this.character.dispose();
+    this.player3D.dispose();
     this.weapon.dispose();
-    this.atmosphere.dispose();
     this.hud.dispose();
     this.dialogueBox.dispose();
     this.inventoryModal.dispose();
     for (const layer of this.layers) {
       layer.dispose();
     }
-    this.baker.dispose();
+    this.postProcess.dispose();
     this.atlas.dispose();
     this.renderer.dispose();
   }

@@ -42,11 +42,12 @@ const WEATHER_VERTEX_SHADER = /* glsl */ `
       vAlpha = 0.85;
     }
 
-    // Wrap particles seamlessly around the player so weather is infinite.
+    // Wrap particles seamlessly around the player so weather is infinite, then
+    // map the 2D gameplay position into the tilted 3D world (x, height, -gy).
     vec2 rel = mod(pos - uPlayerPos + uBounds * 0.5, uBounds) - uBounds * 0.5;
-    vec3 worldCenter = vec3(uPlayerPos + rel, 2.5);
+    vec3 worldCenter = vec3(uPlayerPos.x + rel.x, 2.5, -(uPlayerPos.y + rel.y));
 
-    vec4 worldPosition = vec4(worldCenter + position, 1.0);
+    vec4 worldPosition = vec4(worldCenter + vec3(position.x, position.y, 0.0), 1.0);
     gl_Position = projectionMatrix * viewMatrix * worldPosition;
   }
 `;
