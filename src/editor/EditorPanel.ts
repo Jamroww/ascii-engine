@@ -29,6 +29,7 @@ const ENTITY_KINDS: Array<{ id: EntityKind; label: string }> = [
   { id: 'npc', label: 'NPC' },
   { id: 'node', label: 'Node' },
   { id: 'shrine', label: 'Shrine' },
+  { id: 'prop', label: 'Prop' },
 ];
 
 const CSS = `

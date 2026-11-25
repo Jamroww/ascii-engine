@@ -1,35 +1,128 @@
 /** Brief window after taking a hit during which further damage is ignored. */
 const INVULN_DURATION = 0.6;
 
+// Dash tuning.
+const DASH_DURATION = 0.16;
+const DASH_COOLDOWN = 0.65;
+const BLIGHT_DASH_COOLDOWN = 0.5;
+const DASH_STAMINA_COST = 20;
+const DASH_SPEED = 24;
+const BLIGHT_DASH_SPEED_MULTIPLIER = 1.35;
+const BLIGHT_DASH_CORRUPTION = 25;
+/** Each 30 corruption grants an additional +12% passive move speed. */
+const MOVE_SPEED_THRESHOLD = 30;
+
 export class PlayerStats {
   health = 100;
   readonly maxHealth = 100;
   stamina = 100;
   readonly maxStamina = 100;
 
+  /** Live corruption read each frame by the engine (drives Blight Dash + move speed). */
+  corruption = 0;
+
   private invulnTimer = 0;
+  private dashTimer = 0;
+  private dashCooldown = 0;
+  private dashActive = false;
 
   get isDead(): boolean {
     return this.health <= 0;
   }
 
+  get isDashing(): boolean {
+    return this.dashActive;
+  }
+
+  /** Blight Dash is active whenever corruption crosses its unlock threshold. */
+  get isBlightDash(): boolean {
+    return this.corruption >= BLIGHT_DASH_CORRUPTION;
+  }
+
+  /** Passive move-speed bonus from corruption thresholds (0, 0.12, 0.24, …). */
+  get moveSpeedBonus(): number {
+    return Math.floor(this.corruption / MOVE_SPEED_THRESHOLD) * 0.12;
+  }
+
+  /** Dash velocity in world units / second (Blight Dash is ~35% faster). */
+  get dashSpeed(): number {
+    return this.isBlightDash ? DASH_SPEED * BLIGHT_DASH_SPEED_MULTIPLIER : DASH_SPEED;
+  }
+
+  /** 0..1 of the remaining dash cooldown (0 when ready). */
+  get dashCooldownFraction(): number {
+    const max = this.isBlightDash ? BLIGHT_DASH_COOLDOWN : DASH_COOLDOWN;
+    return this.dashCooldown > 0 ? this.dashCooldown / max : 0;
+  }
+
+  get dashCooldownRemaining(): number {
+    return this.dashCooldown;
+  }
+
+  /** True when a dash can be started right now (cooldown + stamina gate). */
+  get dashReady(): boolean {
+    return this.dashCooldown <= 0 && !this.dashActive && this.stamina >= DASH_STAMINA_COST;
+  }
+
   /**
    * Apply a hit from an enemy. Returns true only if the damage actually landed;
-   * hits during the invulnerability window are swallowed so a pack can't delete
-   * the player in a couple of frames.
+   * hits during the invulnerability window or a dash are swallowed.
    */
   takeDamage(amount: number): boolean {
-    if (amount <= 0 || this.invulnTimer > 0) return false;
+    if (amount <= 0 || this.isInvulnerable()) return false;
     this.health = Math.max(0, this.health - amount);
     this.invulnTimer = INVULN_DURATION;
     return true;
   }
 
-  /** Restore full health/stamina and clear invulnerability (respawn / level load). */
+  /** True while a hit's mercy window or a dash i-frame window is active. */
+  isInvulnerable(): boolean {
+    return this.invulnTimer > 0 || this.dashActive;
+  }
+
+  /** Restore health without exceeding the cap (ignored while dead). */
+  heal(amount: number): void {
+    if (amount <= 0 || this.health <= 0) return;
+    this.health = Math.min(this.maxHealth, this.health + amount);
+  }
+
+  /** Spend stamina; returns false when the pool is too small. */
+  spendStamina(amount: number): boolean {
+    if (this.stamina < amount) return false;
+    this.stamina -= amount;
+    return true;
+  }
+
+  /** Start a dash if cooldown + stamina allow; returns true when it began. */
+  tryStartDash(): boolean {
+    if (this.dashCooldown > 0 || this.dashActive) return false;
+    if (this.stamina < DASH_STAMINA_COST) return false;
+    this.stamina -= DASH_STAMINA_COST;
+    this.dashActive = true;
+    this.dashTimer = DASH_DURATION;
+    this.dashCooldown = this.isBlightDash ? BLIGHT_DASH_COOLDOWN : DASH_COOLDOWN;
+    return true;
+  }
+
+  /** Advance dash timers (called each gameplay frame). */
+  updateDash(dt: number): void {
+    if (this.dashTimer > 0) {
+      this.dashTimer = Math.max(0, this.dashTimer - dt);
+      if (this.dashTimer <= 0) this.dashActive = false;
+    }
+    if (this.dashCooldown > 0) {
+      this.dashCooldown = Math.max(0, this.dashCooldown - dt);
+    }
+  }
+
+  /** Restore full health/stamina and clear transient timers (respawn / level load). */
   reset(): void {
     this.health = this.maxHealth;
     this.stamina = this.maxStamina;
     this.invulnTimer = 0;
+    this.dashTimer = 0;
+    this.dashCooldown = 0;
+    this.dashActive = false;
   }
 
   /**
@@ -38,12 +131,12 @@ export class PlayerStats {
   update(dt: number, wantSprint: boolean, moving: boolean, wading: boolean): boolean {
     this.invulnTimer = Math.max(0, this.invulnTimer - dt);
 
-    const sprinting = wantSprint && moving;
+    const sprinting = wantSprint && moving && !this.dashActive;
 
-    // Sprinting burns stamina; resting recovers it.
+    // Sprinting burns stamina; resting recovers it. Dashing pauses both.
     if (sprinting && this.stamina > 0) {
       this.stamina = Math.max(0, this.stamina - 28 * dt);
-    } else if (!sprinting) {
+    } else if (!sprinting && !this.dashActive) {
       this.stamina = Math.min(this.maxStamina, this.stamina + 16 * dt);
     }
 

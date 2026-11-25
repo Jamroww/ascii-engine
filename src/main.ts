@@ -11,6 +11,8 @@ if (!app) {
 const engine = new Engine(app);
 const level = new LevelManager(engine);
 
+engine.setLevelManager(level);
+
 level.loadLevel(LevelManager.createDefaultVillageLevel());
 
 engine.addLayer(new WeatherLayer(engine.atlas));

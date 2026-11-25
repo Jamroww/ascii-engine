@@ -63,6 +63,10 @@ export interface FrameContext {
   elapsed: number;
   playerPos: Vec2;
   input: InputState;
+  /** 0..1 — corruptive alignment (drives colder/tighter atmosphere). */
+  corruption: number;
+  /** 0..1 — virtuous alignment (drives warmer/wider lantern light). */
+  virtue: number;
 }
 
 export interface IRenderLayer {

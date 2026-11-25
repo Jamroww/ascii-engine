@@ -376,20 +376,35 @@ export class EditorController {
   private entityInfo(entity: PlacedEntity): { cx: number; cy: number; radius: number } {
     switch (entity.kind) {
       case 'building': {
+        if (AssetRegistry.isModelAsset(entity.assetId)) {
+          const radius = AssetRegistry.getModelRadius(entity.assetId);
+          return { cx: entity.x, cy: entity.y + radius, radius: Math.max(radius, 0.8) + 0.4 };
+        }
         const asset = AssetRegistry.getBuildingAsset(entity.assetId);
         const w = asset.width * BUILDING_CELL_SIZE;
         const h = asset.height * BUILDING_CELL_SIZE;
         return { cx: entity.x + w / 2, cy: entity.y + h / 2, radius: Math.max(w, h) / 2 + 0.6 };
       }
       case 'tree':
+        if (AssetRegistry.isModelAsset(entity.assetId)) {
+          const radius = AssetRegistry.getModelRadius(entity.assetId);
+          return { cx: entity.x, cy: entity.y + 0.5, radius: Math.max(radius, 0.8) + 0.4 };
+        }
         return { cx: entity.x, cy: entity.y + 0.5, radius: 1.3 };
       case 'boulder': {
-        const radius = entity.radius ?? AssetRegistry.getBoulderAsset(entity.assetId).radius;
+        const radius = entity.radius ?? AssetRegistry.getModelRadius(entity.assetId);
         return { cx: entity.x, cy: entity.y, radius: Math.max(radius, 0.8) + 0.4 };
       }
       case 'enemy': {
         const radius = AssetRegistry.getEnemyArchetype(entity.assetId).radius;
         return { cx: entity.x, cy: entity.y, radius: Math.max(radius, 0.8) + 0.4 };
+      }
+      case 'npc':
+      case 'node':
+      case 'shrine':
+      case 'prop': {
+        const radius = AssetRegistry.getModelRadius(entity.assetId);
+        return { cx: entity.x, cy: entity.y + radius * 0.5, radius: Math.max(radius, 0.8) + 0.4 };
       }
       default:
         return { cx: entity.x, cy: entity.y, radius: 1.0 };

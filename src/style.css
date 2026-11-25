@@ -13,17 +13,79 @@ body,
   position: relative;
 }
 
+/* ---------------------------------------------------------------------------
+   HUD — a full-viewport, non-interactive overlay. The panel clusters bottom-
+   left, the objective sits top-left, the toast top-centre, and the interact
+   prompt floats just above the dialogue area.
+--------------------------------------------------------------------------- */
 .hud {
   position: absolute;
-  left: 0;
-  bottom: 0;
-  padding: 16px;
+  inset: 0;
   pointer-events: none;
   user-select: none;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
+.hud-objective {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  max-width: 62vw;
+  padding: 7px 12px;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: #c9d8cf;
+  background: rgba(8, 12, 10, 0.6);
+  border: 1px solid #2b3a2e;
+  border-left: 3px solid #6fd07f;
+  border-radius: 6px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.hud-toast {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  color: #f2e6c8;
+  background: rgba(16, 12, 8, 0.84);
+  border: 1px solid #5a4a2e;
+  border-radius: 6px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  white-space: nowrap;
+}
+.hud-toast.is-visible {
+  opacity: 1;
+}
+
+.hud-interact {
+  position: absolute;
+  bottom: 152px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: #e8dcc0;
+  background: rgba(10, 13, 11, 0.8);
+  border: 1px solid #3a4a3c;
+  border-radius: 6px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
+.hud-interact[hidden] {
+  display: none;
+}
+
 .hud-panel {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
   display: flex;
   align-items: flex-end;
   gap: 12px;
@@ -51,7 +113,7 @@ body,
 .hud-bars {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   width: 168px;
 }
 
@@ -63,16 +125,16 @@ body,
 
 .hud-bar-label {
   width: 22px;
-  font-size: 11px;
+  font-size: 10px;
   letter-spacing: 1px;
   color: #7f9a86;
 }
 
 .hud-bar-track {
   flex: 1;
-  height: 12px;
+  height: 10px;
   border: 1px solid #2b3a2e;
-  border-radius: 6px;
+  border-radius: 5px;
   background: rgba(5, 7, 9, 0.7);
   overflow: hidden;
 }
@@ -80,7 +142,7 @@ body,
 .hud-bar-fill {
   height: 100%;
   width: 100%;
-  border-radius: 5px;
+  border-radius: 4px;
   transition: width 0.12s linear;
 }
 
@@ -101,4 +163,127 @@ body,
 
 .hud-bar-fill--stamina.is-low {
   background: linear-gradient(90deg, #a03a3a, #d05b5b);
+}
+
+.hud-bar-fill--corruption {
+  background: linear-gradient(90deg, #6a2fb8, #8a4ad0, #44bb66);
+  box-shadow: 0 0 6px rgba(150, 80, 220, 0.5);
+}
+
+.hud-bar-fill--virtue {
+  background: linear-gradient(90deg, #c98a1e, #ffc94d);
+  box-shadow: 0 0 6px rgba(240, 190, 80, 0.55);
+}
+
+/* --- Ability badges -------------------------------------------------------- */
+.hud-badges {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 1px;
+}
+
+.hud-badge {
+  position: relative;
+  min-width: 136px;
+  padding: 6px 9px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: #cdd6e0;
+  background: rgba(10, 14, 18, 0.72);
+  border: 1px solid #2b3642;
+  border-radius: 6px;
+  overflow: hidden;
+  transition: opacity 0.2s ease;
+}
+
+.hud-badge__sweep {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.hud-badge__row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.hud-badge__label {
+  color: #cdd6e0;
+}
+
+.hud-badge__state {
+  color: #6f8290;
+  font-size: 9px;
+}
+.hud-badge__state.is-ready {
+  color: #8fe6a8;
+}
+
+.hud-badge--dash.is-unlocked .hud-badge__label {
+  color: #b9f0c8;
+}
+.hud-badge--dash.is-unlocked {
+  border-color: #4c9a5f;
+}
+
+.hud-badge--burst:not(.is-unlocked) {
+  opacity: 0.42;
+}
+.hud-badge--burst.is-unlocked {
+  border-color: #8a6a2e;
+}
+.hud-badge--burst.is-unlocked .hud-badge__label {
+  color: #f2d78a;
+}
+
+/* ---------------------------------------------------------------------------
+   Dialogue overlay — bottom-centre, matching the dark moody HUD.
+--------------------------------------------------------------------------- */
+.dialogue-box {
+  position: absolute;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 48px));
+  padding: 14px 18px;
+  pointer-events: none;
+  user-select: none;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: #d8dfd6;
+  background: rgba(8, 11, 9, 0.86);
+  border: 1px solid #2b3a2e;
+  border-radius: 8px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+}
+.dialogue-box[hidden] {
+  display: none;
+}
+
+.dialogue-box__speaker {
+  margin-bottom: 6px;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: #e0b44c;
+}
+
+.dialogue-box__line {
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 2.25em;
+}
+
+.dialogue-box__hint {
+  margin-top: 10px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: #5d6f7e;
 }

@@ -1,3 +1,20 @@
+import * as THREE from 'three';
+import {
+  CHARACTER_MODEL_FACTORIES,
+} from '../rendering/Characters';
+import {
+  ENEMY_MODEL_FACTORIES,
+} from '../rendering/Enemies';
+import {
+  BUILDING_MODEL_FACTORIES,
+} from '../rendering/Buildings';
+import {
+  NATURE_PROP_MODEL_FACTORIES,
+} from '../rendering/Nature';
+import {
+  PROGRESSION_MODEL_FACTORIES,
+  setLightShrinePurified,
+} from '../rendering/Progression';
 import {
   createRiversideCottage,
   type BuildingAsset,
@@ -12,6 +29,7 @@ import type { EntityKind } from './levelTypes';
 
 type BuildingFactory = () => BuildingAsset;
 type TreeFactory = () => TreeAsset;
+type ModelFactory = () => THREE.Group;
 
 export interface EnemyArchetype {
   id: string;
@@ -31,6 +49,18 @@ export interface EnemyArchetype {
   kind: 'melee' | 'ranged';
 }
 
+interface ModelAssetEntry {
+  kind: EntityKind;
+  factory: ModelFactory;
+  /** Default collider radius in world units (0 for walk-over items). */
+  radius: number;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy flat ASCII asset registries (kept for the perimeter forest ring and
+// the pngToAscii custom-building import).
+// ---------------------------------------------------------------------------
+
 const buildingFactories = new Map<string, BuildingFactory>([
   ['riverside_cottage', createRiversideCottage],
 ]);
@@ -42,8 +72,7 @@ const treeFactories = new Map<string, TreeFactory>([
 ]);
 
 // Boulders are rendered inside WaterLayer's shader; here we only carry the
-// metadata needed to register their colliders. The default radius is a fallback
-// for entities that don't supply one.
+// metadata needed to register their colliders.
 const boulderAssets = new Map<string, { radius: number }>([
   ['river_boulder', { radius: 1.0 }],
 ]);
@@ -81,12 +110,69 @@ const enemyAssets = new Map<string, EnemyArchetype>([
       kind: 'ranged',
     },
   ],
+  [
+    'blight_sentinel',
+    {
+      id: 'blight_sentinel',
+      maxHp: 140,
+      speed: 3.0,
+      radius: 0.95,
+      aggroRange: 9,
+      attackRange: 1.7,
+      telegraphTime: 0.55,
+      attackCooldown: 1.6,
+      damage: 20,
+      kind: 'melee',
+    },
+  ],
+]);
+
+// ---------------------------------------------------------------------------
+// Unified procedural 3D model registry (baked into ASCII billboards).
+// ---------------------------------------------------------------------------
+
+const modelAssets = new Map<string, ModelAssetEntry>([
+  // Characters
+  ['player_traveler', { kind: 'npc', factory: CHARACTER_MODEL_FACTORIES.player_traveler, radius: 0.5 }],
+  ['npc_sibling', { kind: 'npc', factory: CHARACTER_MODEL_FACTORIES.npc_sibling, radius: 0.5 }],
+  ['npc_ferryman', { kind: 'npc', factory: CHARACTER_MODEL_FACTORIES.npc_ferryman, radius: 0.5 }],
+  ['npc_lantern_keeper', { kind: 'npc', factory: CHARACTER_MODEL_FACTORIES.npc_lantern_keeper, radius: 0.5 }],
+  ['npc_herbalist', { kind: 'npc', factory: CHARACTER_MODEL_FACTORIES.npc_herbalist, radius: 0.5 }],
+  ['npc_elder', { kind: 'npc', factory: CHARACTER_MODEL_FACTORIES.npc_elder, radius: 0.5 }],
+  // Enemies
+  ['blight_stalker', { kind: 'enemy', factory: ENEMY_MODEL_FACTORIES.blight_stalker, radius: 0.55 }],
+  ['spore_spitter', { kind: 'enemy', factory: ENEMY_MODEL_FACTORIES.spore_spitter, radius: 0.6 }],
+  ['blight_sentinel', { kind: 'enemy', factory: ENEMY_MODEL_FACTORIES.blight_sentinel, radius: 0.95 }],
+  // Buildings
+  ['cottage_fisher', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.cottage_fisher, radius: 2.4 }],
+  ['cottage_boathouse', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.cottage_boathouse, radius: 2.4 }],
+  ['village_dock', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.village_dock, radius: 0 }],
+  ['stone_bridge', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.stone_bridge, radius: 0 }],
+  ['fence_stone_wall', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.fence_stone_wall, radius: 0.8 }],
+  // Nature: trees
+  ['tree_pine', { kind: 'tree', factory: NATURE_PROP_MODEL_FACTORIES.tree_pine, radius: 0.7 }],
+  ['tree_oak', { kind: 'tree', factory: NATURE_PROP_MODEL_FACTORIES.tree_oak, radius: 0.9 }],
+  ['tree_wilted', { kind: 'tree', factory: NATURE_PROP_MODEL_FACTORIES.tree_wilted, radius: 0.65 }],
+  // Nature: boulders
+  ['rock_river_boulder', { kind: 'boulder', factory: NATURE_PROP_MODEL_FACTORIES.rock_river_boulder, radius: 1.1 }],
+  ['rock_shoreline_ledge', { kind: 'boulder', factory: NATURE_PROP_MODEL_FACTORIES.rock_shoreline_ledge, radius: 1.3 }],
+  ['rock_stepping_stones', { kind: 'boulder', factory: NATURE_PROP_MODEL_FACTORIES.rock_stepping_stones, radius: 0 }],
+  // Nature: village clutter
+  ['prop_drying_fish_rack', { kind: 'prop', factory: NATURE_PROP_MODEL_FACTORIES.prop_drying_fish_rack, radius: 0.6 }],
+  ['prop_barrels_crates', { kind: 'prop', factory: NATURE_PROP_MODEL_FACTORIES.prop_barrels_crates, radius: 0.6 }],
+  ['prop_campfire_ring', { kind: 'prop', factory: NATURE_PROP_MODEL_FACTORIES.prop_campfire_ring, radius: 0.4 }],
+  ['prop_corrupted_reeds', { kind: 'prop', factory: NATURE_PROP_MODEL_FACTORIES.prop_corrupted_reeds, radius: 0 }],
+  // Progression
+  ['poison_node', { kind: 'node', factory: PROGRESSION_MODEL_FACTORIES.poison_node, radius: 1.0 }],
+  ['light_shrine', { kind: 'shrine', factory: PROGRESSION_MODEL_FACTORIES.light_shrine, radius: 1.0 }],
 ]);
 
 export class AssetRegistry {
   private constructor() {
     // Namespace-style holder; all state is module-level maps above.
   }
+
+  // --- Legacy ASCII assets ---------------------------------------------------
 
   public static getBuildingAsset(assetId: string): BuildingAsset {
     const factory = buildingFactories.get(assetId);
@@ -102,8 +188,10 @@ export class AssetRegistry {
 
   public static getBoulderAsset(assetId: string): { radius: number } {
     const meta = boulderAssets.get(assetId);
-    if (!meta) throw new Error(`Unknown boulder asset: "${assetId}"`);
-    return meta;
+    if (meta) return meta;
+    const model = modelAssets.get(assetId);
+    if (model) return { radius: model.radius };
+    throw new Error(`Unknown boulder asset: "${assetId}"`);
   }
 
   public static getEnemyArchetype(assetId: string): EnemyArchetype {
@@ -112,23 +200,52 @@ export class AssetRegistry {
     return meta;
   }
 
-  public static listAssetIds(kind: EntityKind): string[] {
-    switch (kind) {
-      case 'building':
-        return [...buildingFactories.keys()];
-      case 'tree':
-        return [...treeFactories.keys()];
-      case 'boulder':
-        return [...boulderAssets.keys()];
-      case 'enemy':
-        return [...enemyAssets.keys()];
-      default:
-        return [];
-    }
-  }
-
   /** Register a custom building asset (e.g. a pngToAscii JSON import). */
   public static registerCustomBuilding(id: string, asset: BuildingAsset): void {
     buildingFactories.set(id, () => asset);
+  }
+
+  // --- Unified 3D model registry ---------------------------------------------
+
+  public static isModelAsset(assetId: string): boolean {
+    return modelAssets.has(assetId);
+  }
+
+  /** Build a fresh model, applying the shrine purified state when requested. */
+  public static getModel(assetId: string, purified = false): THREE.Group {
+    const entry = modelAssets.get(assetId);
+    if (!entry) throw new Error(`Unknown model asset: "${assetId}"`);
+    const model = entry.factory();
+    if (assetId === 'light_shrine' && purified) {
+      setLightShrinePurified(model, true);
+    }
+    return model;
+  }
+
+  /** Default collider radius for an entity, falling back to a safe value. */
+  public static getModelRadius(assetId: string): number {
+    const entry = modelAssets.get(assetId);
+    if (entry) return entry.radius;
+    const boulder = boulderAssets.get(assetId);
+    if (boulder) return boulder.radius;
+    return 0.6;
+  }
+
+  public static listAssetIds(kind: EntityKind): string[] {
+    const ids: string[] = [];
+    for (const [id, entry] of modelAssets) {
+      if (entry.kind === kind) ids.push(id);
+    }
+    // Keep legacy ASCII assets placeable through their existing layers.
+    if (kind === 'building') {
+      for (const id of buildingFactories.keys()) if (!ids.includes(id)) ids.push(id);
+    } else if (kind === 'tree') {
+      for (const id of treeFactories.keys()) if (!ids.includes(id)) ids.push(id);
+    } else if (kind === 'boulder') {
+      for (const id of boulderAssets.keys()) if (!ids.includes(id)) ids.push(id);
+    } else if (kind === 'enemy') {
+      for (const id of enemyAssets.keys()) if (!ids.includes(id)) ids.push(id);
+    }
+    return ids;
   }
 }

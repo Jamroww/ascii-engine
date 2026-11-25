@@ -15,6 +15,9 @@ const ATMOSPHERE_FRAGMENT_SHADER = /* glsl */ `
   uniform vec2 uViewSize;
   uniform float uTime;
   uniform float uLanternRadius;
+  uniform float uVirtue;
+  uniform float uCorruption;
+  uniform float uBurstGlow;
   uniform float uFogNear;
   uniform float uFogFar;
 
@@ -28,8 +31,10 @@ const ATMOSPHERE_FRAGMENT_SHADER = /* glsl */ `
     float dist = distance(vWorldPos, uPlayerPos);
 
     // Warm radial lantern pool centred on the player, breathing gently.
-    float radius = uLanternRadius + sin(uTime * 1.3) * 0.6;
-    float lantern = 1.0 - smoothstep(0.0, radius, dist);
+    // Virtue widens/warms it, corruption tightens it, a burst briefly flares it.
+    float radius = uLanternRadius + sin(uTime * 1.3) * 0.6
+      + uVirtue * 2.5 - uCorruption * 1.6 + uBurstGlow * 6.0;
+    float lantern = 1.0 - smoothstep(0.0, max(radius, 0.001), dist);
     float warmGlow = lantern * lantern;
 
     // Outer fog: moody cool-slate darkness creeping in past the lantern pool.
@@ -44,8 +49,10 @@ const ATMOSPHERE_FRAGMENT_SHADER = /* glsl */ `
     float dark = clamp(max(fog, corner) * (1.0 - lantern * 0.55), 0.0, 0.8);
 
     // Cool slate in the dark, warmed by a faint amber wash under the lantern.
+    // Virtue and a radiant burst pull the pool warmer; corruption edges it cold.
     vec3 color = vec3(0.022, 0.042, 0.068);
-    color += vec3(1.0, 0.50, 0.18) * warmGlow * 0.18;
+    color += vec3(1.0, 0.50, 0.18) * warmGlow * (0.18 + uVirtue * 0.22 + uBurstGlow * 0.5);
+    color += vec3(0.24, 0.16, 0.30) * uCorruption * 0.06;
 
     float dither = hash(gl_FragCoord.xy) * 0.03 - 0.015;
     float alpha = clamp(dark + dither + warmGlow * 0.05, 0.0, 0.84);
@@ -57,6 +64,7 @@ const ATMOSPHERE_FRAGMENT_SHADER = /* glsl */ `
 export class AtmosphereLayer implements IRenderLayer {
   public readonly object3D: THREE.Mesh;
   private readonly material: THREE.ShaderMaterial;
+  private burstTimer = 0;
 
   constructor(size = 160) {
     this.material = new THREE.ShaderMaterial({
@@ -67,6 +75,9 @@ export class AtmosphereLayer implements IRenderLayer {
         uViewSize: { value: new THREE.Vector2(20, 20) },
         uTime: { value: 0 },
         uLanternRadius: { value: 10.0 },
+        uVirtue: { value: 0 },
+        uCorruption: { value: 0 },
+        uBurstGlow: { value: 0 },
         uFogNear: { value: 11.0 },
         uFogFar: { value: 30.0 },
       },
@@ -90,9 +101,20 @@ export class AtmosphereLayer implements IRenderLayer {
     this.material.uniforms.uFogFar.value = worldHeight * 1.5;
   }
 
+  /** Flare the warm lantern pool for a short window (Radiant Burst). */
+  public triggerBurst(): void {
+    this.burstTimer = 2.5;
+  }
+
   public update(ctx: FrameContext): void {
     this.material.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
     this.material.uniforms.uTime.value = ctx.elapsed;
+
+    this.burstTimer = Math.max(0, this.burstTimer - ctx.dt);
+    const burst = this.burstTimer > 0 ? Math.pow(this.burstTimer / 2.5, 1.5) : 0;
+    this.material.uniforms.uBurstGlow.value = burst;
+    this.material.uniforms.uVirtue.value = ctx.virtue;
+    this.material.uniforms.uCorruption.value = ctx.corruption;
   }
 
   public dispose(): void {

@@ -3,106 +3,13 @@ import type { FrameContext, IRenderLayer } from '../core/types';
 import { GlyphAtlas } from './GlyphAtlas';
 import type { EnemyManager } from '../core/EnemyManager';
 import { yToZ } from '../core/world';
-
-type RGB = [number, number, number];
-
-interface SpriteCell {
-  x: number;
-  y: number;
-  char: string;
-  r: number;
-  g: number;
-  b: number;
-  /** 1 for pulsing core / eye cells, else 0. */
-  glow: number;
-}
-
-interface EnemySprite {
-  width: number;
-  height: number;
-  cells: SpriteCell[];
-}
-
-function buildSprite(
-  rows: string[],
-  palette: Record<string, RGB>,
-  glowChars?: ReadonlySet<string>
-): EnemySprite {
-  const height = rows.length;
-  const width = Math.max(...rows.map((r) => r.length));
-  const cells: SpriteCell[] = [];
-  for (let r = 0; r < height; r++) {
-    const line = rows[r];
-    const y = height - 1 - r;
-    for (let x = 0; x < line.length; x++) {
-      const ch = line[x];
-      if (ch === ' ') continue;
-      const c = palette[ch] ?? ([0.6, 0.6, 0.6] as RGB);
-      cells.push({ x, y, char: ch, r: c[0], g: c[1], b: c[2], glow: glowChars?.has(ch) ? 1 : 0 });
-    }
-  }
-  return { width, height, cells };
-}
-
-// Hunched, angular quadruped predator: dark opaque core, bright acid-lime /
-// sickly-teal outline rim, glowing eyes.
-const STALKER_SPRITE = buildSprite(
-  [
-    '    ^   ^  ',
-    '   < o o > ',
-    '  <|#%#|>  ',
-    ' <(#%#%#)> ',
-    '<|#%%%#|>  ',
-    '<##%#%##>  ',
-    ' <##%##>   ',
-    '  \\##/     ',
-    '  v   v    ',
-  ],
-  {
-    '#': [0.05, 0.08, 0.07],
-    '%': [0.09, 0.14, 0.12],
-    '<': [0.6, 0.95, 0.45],
-    '>': [0.6, 0.95, 0.45],
-    '^': [0.6, 0.95, 0.45],
-    'v': [0.45, 0.8, 0.4],
-    '(': [0.45, 0.85, 0.5],
-    ')': [0.45, 0.85, 0.5],
-    '/': [0.5, 0.9, 0.45],
-    '\\': [0.5, 0.9, 0.45],
-    '|': [0.5, 0.9, 0.45],
-    o: [1.0, 1.0, 0.35],
-    '*': [1.0, 0.95, 0.4],
-  },
-  new Set(['o', '*'])
-);
-
-// Bulbous, rooted fungal sac: pulsing violet/magenta core and a bright
-// toxic-green spore crown.
-const SPITTER_SPRITE = buildSprite(
-  [
-    '   * ^ *   ',
-    '  * ^*^ *  ',
-    '  (@%#%@)  ',
-    ' (##%#%##) ',
-    ' (##@%@##) ',
-    '  (#####)  ',
-    '   ~_~     ',
-    '   ~~~     ',
-    '    _      ',
-  ],
-  {
-    '*': [0.55, 1.0, 0.3],
-    '^': [0.7, 1.0, 0.4],
-    '@': [0.75, 0.3, 0.9],
-    '%': [0.6, 0.25, 0.85],
-    '#': [0.06, 0.09, 0.08],
-    '(': [0.4, 0.8, 0.5],
-    ')': [0.4, 0.8, 0.5],
-    '~': [0.3, 0.65, 0.4],
-    _: [0.25, 0.55, 0.35],
-  },
-  new Set(['@', '%'])
-);
+import {
+  AsciiModelBaker,
+  disposeModelTree,
+  type BakedAsciiSprite,
+} from './AsciiModelBaker';
+import { createBillboardMaterial, glyphGridFor } from './AsciiBillboardMaterial';
+import { ENEMY_MODEL_FACTORIES, type EnemyAssetId } from './Enemies';
 
 const VERTEX_SHADER = /* glsl */ `
   attribute float aGlyphIndex;
@@ -141,8 +48,8 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     float alpha = texture2D(uAtlas, atlasUv).a;
     if (alpha < 0.15) {
-      // Opaque dark silhouette backing for solid bodies so ground/grass never
-      // bleeds through an enemy; additive projectiles fall through to discard.
+      // Opaque dark silhouette backing for solid bodies; additive projectiles
+      // fall through to discard.
       if (uOpaque > 0.5) {
         gl_FragColor = vec4(0.03, 0.04, 0.05, 0.92);
         return;
@@ -173,11 +80,10 @@ const SHADOW_FRAGMENT_SHADER = /* glsl */ `
 `;
 
 const MAX_ENEMIES = 128;
-const MAX_CELLS_PER_SPRITE = 110;
 const MAX_HEALTH_CELLS = 5;
 const MAX_PROJECTILES = 256;
-const CELL_SIZE = 0.2;
 const HIT_FLASH_DURATION = 0.12;
+const BILLBOARD_RESOLUTION = 128;
 
 interface InstancedBuffers {
   mesh: THREE.InstancedMesh;
@@ -188,31 +94,40 @@ interface InstancedBuffers {
 }
 
 /**
- * Renders live enemies as dense, multi-layered ASCII sprites with a grounding
- * shadow, idle/chase bob, telegraph rim-flash and a compact health bar. It
- * reads state straight from `EnemyManager` each frame and only re-writes the
- * instance buffers, so the manager stays the single source of truth.
+ * Renders live enemies as baked 3D ASCII billboards with a grounding shadow,
+ * idle/chase bob, telegraph rim-tint, white hit-flash and a compact health bar.
+ * It reads state straight from `EnemyManager` each frame; the manager stays the
+ * single source of truth.
  */
 export class EnemyLayer implements IRenderLayer {
   public readonly object3D = new THREE.Group();
 
   private readonly atlas: GlyphAtlas;
   private readonly manager: EnemyManager;
+  private readonly baker: AsciiModelBaker;
   private readonly dummy = new THREE.Object3D();
 
-  private readonly enemyBuffers: InstancedBuffers;
+  private readonly typeSprites = new Map<string, BakedAsciiSprite>();
+  private readonly bakedTypes = new Set<string>();
+
+  private readonly enemyMeshes: THREE.Mesh[] = [];
+  private readonly enemyMaterials: THREE.ShaderMaterial[] = [];
+  private readonly enemyTypes: string[] = [];
+
+  private readonly healthBuffers: InstancedBuffers;
   private readonly projectileBuffers: InstancedBuffers;
   private readonly projectileGlyphs: number[];
 
   private readonly shadowMaterial: THREE.ShaderMaterial;
   private readonly shadowMesh: THREE.InstancedMesh;
 
-  constructor(atlas: GlyphAtlas, manager: EnemyManager) {
+  constructor(atlas: GlyphAtlas, manager: EnemyManager, baker: AsciiModelBaker) {
     this.atlas = atlas;
     this.manager = manager;
+    this.baker = baker;
 
-    this.enemyBuffers = this.createBuffers(
-      MAX_ENEMIES * (MAX_CELLS_PER_SPRITE + MAX_HEALTH_CELLS),
+    this.healthBuffers = this.createBuffers(
+      MAX_ENEMIES * MAX_HEALTH_CELLS,
       THREE.NormalBlending,
       true
     );
@@ -234,7 +149,24 @@ export class EnemyLayer implements IRenderLayer {
     this.shadowMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.shadowMesh.frustumCulled = false;
 
-    this.object3D.add(this.enemyBuffers.mesh, this.projectileBuffers.mesh, this.shadowMesh);
+    this.object3D.add(this.healthBuffers.mesh, this.projectileBuffers.mesh, this.shadowMesh);
+  }
+
+  /** Bake any newly-seen enemy model types into the shared cache. */
+  public preRender(renderer: THREE.WebGLRenderer): void {
+    const types = new Set<string>();
+    for (const enemy of this.manager.getEnemies()) types.add(enemy.assetId);
+
+    for (const type of types) {
+      if (this.bakedTypes.has(type)) continue;
+      const factory = ENEMY_MODEL_FACTORIES[type as EnemyAssetId];
+      if (!factory) continue;
+      const model = factory();
+      const sprite = this.baker.bake(renderer, type, model, BILLBOARD_RESOLUTION);
+      this.typeSprites.set(type, sprite);
+      this.bakedTypes.add(type);
+      disposeModelTree(model);
+    }
   }
 
   public update(ctx: FrameContext): void {
@@ -243,98 +175,105 @@ export class EnemyLayer implements IRenderLayer {
   }
 
   public dispose(): void {
-    this.disposeBuffers(this.enemyBuffers);
+    this.disposeBuffers(this.healthBuffers);
     this.disposeBuffers(this.projectileBuffers);
     this.shadowMesh.geometry.dispose();
     this.shadowMaterial.dispose();
+    for (let i = 0; i < this.enemyMeshes.length; i++) {
+      this.enemyMeshes[i].geometry.dispose();
+      this.enemyMaterials[i].dispose();
+    }
   }
 
   // --- Per-frame instance writes ---------------------------------------------
 
   private updateEnemies(ctx: FrameContext): void {
-    const { mesh, glyphs, colors, glyphAttr, colorAttr } = this.enemyBuffers;
     const enemies = this.manager.getEnemies();
-    const capacity = glyphs.length;
 
-    let i = 0;
-    let s = 0;
-    for (const enemy of enemies) {
-      if (i >= capacity) break;
+    while (this.enemyMeshes.length < enemies.length) {
+      this.createEnemyBillboard();
+    }
+    for (let i = enemies.length; i < this.enemyMeshes.length; i++) {
+      this.enemyMeshes[i].visible = false;
+    }
 
-      const sprite = enemy.assetId === 'spore_spitter' ? SPITTER_SPRITE : STALKER_SPRITE;
-      const flash = enemy.hitFlashTimer > 0 ? Math.min(1, enemy.hitFlashTimer / HIT_FLASH_DURATION) : 0;
+    const {
+      mesh: healthMesh,
+      glyphs: healthGlyphs,
+      colors: healthColors,
+      glyphAttr: healthGlyphAttr,
+      colorAttr: healthColorAttr,
+    } = this.healthBuffers;
+
+    let hi = 0;
+    let si = 0;
+
+    for (let e = 0; e < enemies.length; e++) {
+      const enemy = enemies[e];
+      const mesh = this.enemyMeshes[e];
+      const material = this.enemyMaterials[e];
+      const sprite = this.typeSprites.get(enemy.assetId);
+
+      if (!sprite) {
+        mesh.visible = false;
+        continue;
+      }
+      mesh.visible = true;
+
+      if (this.enemyTypes[e] !== enemy.assetId) {
+        this.enemyTypes[e] = enemy.assetId;
+        material.uniforms.uBakedTex.value = sprite.texture;
+        material.uniforms.uGlyphGrid.value = glyphGridFor(sprite.worldWidth, sprite.worldHeight);
+      }
+
+      const flash =
+        enemy.hitFlashTimer > 0 ? Math.min(1, enemy.hitFlashTimer / HIT_FLASH_DURATION) : 0;
+      const stunned = enemy.stunTimer > 0;
+      const stunPulse = 0.6 + 0.4 * Math.sin(ctx.elapsed * 22);
       const telegraph = enemy.state === 'telegraph';
       const telegraphPulse = 0.5 + 0.5 * Math.sin(ctx.elapsed * 26);
 
-      // Idle / chase bob, stilled while telegraphing so the warning reads clean.
-      const bob = enemy.state === 'idle' || enemy.state === 'chase'
-        ? Math.sin(ctx.elapsed * 4 + enemy.x * 1.3 + enemy.y * 0.7) * 0.06
-        : 0;
+      const bob =
+        enemy.state === 'idle' || enemy.state === 'chase'
+          ? Math.sin(ctx.elapsed * 4 + enemy.x * 1.3 + enemy.y * 0.7) * 0.06
+          : 0;
 
-      const scale = CELL_SIZE * (telegraph ? 1.0 + telegraphPulse * 0.2 : 1.0);
-      const halfW = (sprite.width * scale) / 2;
-      const baseY = enemy.y + bob - 0.45;
+      const scale = telegraph ? 1.0 + telegraphPulse * 0.2 : 1.0;
+      const w = sprite.worldWidth * scale;
+      const h = sprite.worldHeight * scale;
+      const baseY = enemy.y + bob - 0.02;
       const ez = yToZ(enemy.y);
 
-      for (const cell of sprite.cells) {
-        if (i >= capacity) break;
+      mesh.position.set(enemy.x, baseY + h / 2, ez);
+      mesh.scale.set(w, h, 1);
 
-        let r = cell.r;
-        let g = cell.g;
-        let b = cell.b;
-
-        // Pulsing core / eye cells breathe gently.
-        if (cell.glow > 0) {
-          const glowPulse = 0.72 + 0.38 * Math.sin(ctx.elapsed * 5 + cell.x * 0.9 + cell.y * 1.1);
-          r *= glowPulse;
-          g *= glowPulse;
-          b *= glowPulse;
-        }
-
-        if (flash > 0) {
-          // Bright white flash on hit.
-          r += (1 - r) * flash;
-          g += (1 - g) * flash;
-          b += (1 - b) * flash;
-        } else if (telegraph) {
-          // Crisp gold/white rim expansion before the attack fires.
-          const w = telegraphPulse;
-          r += (1.0 - r) * w * 0.75;
-          g += (0.95 - g) * w * 0.75;
-          b += (0.55 - b) * w * 0.75;
-        }
-
-        this.dummy.position.set(
-          enemy.x + (cell.x + 0.5) * scale - halfW,
-          baseY + (cell.y + 0.5) * scale,
-          ez
-        );
-        this.dummy.scale.set(scale, scale, 1);
-        this.dummy.updateMatrix();
-        mesh.setMatrixAt(i, this.dummy.matrix);
-
-        glyphs[i] = this.atlas.getIndex(cell.char);
-        colors[i * 3 + 0] = r;
-        colors[i * 3 + 1] = g;
-        colors[i * 3 + 2] = b;
-        i++;
+      material.uniforms.uFlash.value = flash;
+      material.uniforms.uAlpha.value = 1;
+      if (stunned) {
+        material.uniforms.uTint.value.set(1.0, 0.8, 0.3);
+        material.uniforms.uTintStrength.value = stunPulse;
+      } else if (telegraph) {
+        material.uniforms.uTint.value.set(1.0, 0.95, 0.55);
+        material.uniforms.uTintStrength.value = telegraphPulse * 0.85;
+      } else {
+        material.uniforms.uTintStrength.value = 0;
       }
 
       // Grounding shadow ellipse beneath the sprite.
-      if (s < MAX_ENEMIES) {
-        this.dummy.position.set(enemy.x, enemy.y - 0.45, 0);
-        this.dummy.scale.set(sprite.width * scale * 0.85, scale * 2.4, 1);
+      if (si < MAX_ENEMIES) {
+        this.dummy.position.set(enemy.x, baseY, 0);
+        this.dummy.scale.set(w * 0.85, Math.max(w * 0.4, 0.5), 1);
         this.dummy.updateMatrix();
-        this.shadowMesh.setMatrixAt(s, this.dummy.matrix);
-        s++;
+        this.shadowMesh.setMatrixAt(si, this.dummy.matrix);
+        si++;
       }
 
       // Compact health bar above any damaged enemy.
-      if (enemy.hp < enemy.maxHp && i < capacity) {
+      if (enemy.hp < enemy.maxHp && hi + MAX_HEALTH_CELLS <= healthGlyphs.length) {
         const hpFrac = enemy.hp / enemy.maxHp;
         const barCells = MAX_HEALTH_CELLS;
         const barW = barCells * 0.14;
-        const barTop = baseY + sprite.height * scale + 0.28;
+        const barTop = baseY + h + 0.28;
         const filled = Math.round(hpFrac * barCells);
 
         let cr = 0.4;
@@ -350,29 +289,29 @@ export class EnemyLayer implements IRenderLayer {
           cb = 0.25;
         }
 
-        for (let b = 0; b < barCells && i < capacity; b++) {
+        for (let b = 0; b < barCells; b++) {
           const isFilled = b < filled;
           this.dummy.position.set(enemy.x - barW / 2 + (b + 0.5) * 0.14, barTop, ez);
           this.dummy.scale.set(0.14, 0.14, 1);
           this.dummy.updateMatrix();
-          mesh.setMatrixAt(i, this.dummy.matrix);
+          healthMesh.setMatrixAt(hi, this.dummy.matrix);
 
-          glyphs[i] = this.atlas.getIndex(isFilled ? '=' : '-');
-          colors[i * 3 + 0] = isFilled ? cr : 0.25;
-          colors[i * 3 + 1] = isFilled ? cg : 0.12;
-          colors[i * 3 + 2] = isFilled ? cb : 0.1;
-          i++;
+          healthGlyphs[hi] = this.atlas.getIndex(isFilled ? '=' : '-');
+          healthColors[hi * 3 + 0] = isFilled ? cr : 0.25;
+          healthColors[hi * 3 + 1] = isFilled ? cg : 0.12;
+          healthColors[hi * 3 + 2] = isFilled ? cb : 0.1;
+          hi++;
         }
       }
     }
 
-    mesh.count = i;
-    mesh.instanceMatrix.needsUpdate = true;
-    glyphAttr.needsUpdate = true;
-    colorAttr.needsUpdate = true;
-
-    this.shadowMesh.count = s;
+    this.shadowMesh.count = si;
     this.shadowMesh.instanceMatrix.needsUpdate = true;
+
+    healthMesh.count = hi;
+    healthMesh.instanceMatrix.needsUpdate = true;
+    healthGlyphAttr.needsUpdate = true;
+    healthColorAttr.needsUpdate = true;
   }
 
   private updateProjectiles(ctx: FrameContext): void {
@@ -407,6 +346,16 @@ export class EnemyLayer implements IRenderLayer {
   }
 
   // --- Helpers ---------------------------------------------------------------
+
+  private createEnemyBillboard(): void {
+    const material = createBillboardMaterial(this.atlas);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+    mesh.frustumCulled = false;
+    this.enemyMeshes.push(mesh);
+    this.enemyMaterials.push(material);
+    this.enemyTypes.push('');
+    this.object3D.add(mesh);
+  }
 
   private createBuffers(
     capacity: number,

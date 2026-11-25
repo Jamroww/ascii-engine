@@ -1,0 +1,118 @@
+{
+  "npc_ferryman": {
+    "speaker": "The Ferryman",
+    "default": [
+      "Evening, traveler. You'd be the Wilted Flower, then — the one they whisper about on the bank.",
+      "The river's sick. Blight chokes the upstream bend, and the fish die belly-up in the reeds.",
+      "Clear the upstream Blight for me and I'll pole you across. It's the only road north."
+    ],
+    "quest_active": [
+      "The taint thickens where the river bends north. Clear the Blight that chokes it.",
+      "Mind the Poison Nodes — they feed the sickness. The old Light Shrines may still guard you."
+    ],
+    "quest_cleared_light": [
+      "The water runs clean again. The Light you carried kept the dark at bay, traveler."
+    ],
+    "quest_cleared_poison": [
+      "The water runs clean again… though something in your eyes has grown colder than the river."
+    ],
+    "high_corruption": [
+      "You carry the Blight now, like driftwood soaked through. Careful it doesn't carry you."
+    ],
+    "high_virtue": [
+      "The Light clings to you like morning mist. The shrines will remember your name."
+    ]
+  },
+  "npc_lantern_keeper": {
+    "speaker": "The Lantern Keeper",
+    "default": [
+      "A lamp for the lost. That's all I keep out here on the water's edge.",
+      "The dark out past the village isn't empty, traveler. It watches. Keep your lantern close."
+    ],
+    "quest_active": [
+      "You're after the upstream Blight, aren't you? Then don't let your light gutter out.",
+      "The Shrines were lit long before the Blight came. Some of their warmth still waits to be woken."
+    ],
+    "quest_cleared_light": [
+      "You brought the light back. The river has its shine again — I can feel it from here."
+    ],
+    "quest_cleared_poison": [
+      "The river is clear… but your lamp burns a stranger color now. Mind the wick."
+    ],
+    "high_corruption": [
+      "Your lantern gutters green. I've only ever seen that in the things that crawl out of the Blight."
+    ],
+    "high_virtue": [
+      "You burn warm and steady. Whatever waits in the dark will think twice tonight."
+    ]
+  },
+  "npc_herbalist": {
+    "speaker": "The Herbalist",
+    "default": [
+      "Sit. Breathe. The marsh reeks worse than usual — that's the Blight pushing south.",
+      "I gather what I can before the rot takes the roots. Not much clean medicine left up here."
+    ],
+    "quest_active": [
+      "If you're wading upstream, take care — the Blight doesn't just poison the water, it poisons the blood.",
+      "A Poison Node is a festering wound in the earth. Absorb it and you carry its sickness in your own veins."
+    ],
+    "quest_cleared_light": [
+      "The river runs clear and the herbs grow straight again. You've done a rare kindness."
+    ],
+    "quest_cleared_poison": [
+      "You smell of rot and neon, friend. Sit still — let me at least try to draw some of it out."
+    ],
+    "high_corruption": [
+      "Your pulse runs hot and green. That much Blight in a body… it usually hollows a person out."
+    ],
+    "high_virtue": [
+      "There's a warmth in you that doesn't come from any fire I know. It suits you."
+    ]
+  },
+  "npc_elder": {
+    "speaker": "The Elder",
+    "default": [
+      "The village remembers when the river ran clear and the shrine-lights burned till dawn.",
+      "Now the Shrines sleep cold and the young ones forget why we ever lit them at all."
+    ],
+    "quest_active": [
+      "So the Ferryman has set you to the old work. Good. Someone must remember it.",
+      "Purify a Shrine and its warmth returns to the water. That is the old bargain, kept."
+    ],
+    "quest_cleared_light": [
+      "You have restored the old warmth. The village owes you more than it knows how to say."
+    ],
+    "quest_cleared_poison": [
+      "You traded the Blight's poison for the river's. I pray the bargain you struck was worth it."
+    ],
+    "high_corruption": [
+      "The Blight has its hooks in you, child. Even so, the village will not turn you away."
+    ],
+    "high_virtue": [
+      "The shrine-light follows you. You walk like the keepers of the old days."
+    ]
+  },
+  "npc_sibling": {
+    "speaker": "Your Sibling",
+    "default": [
+      "You came back. I told them you would.",
+      "Don't wander too far upriver alone. Last time… last time the water kept what it took."
+    ],
+    "quest_active": [
+      "You're going to the upstream bend? Then I'm coming with you as far as the shallows.",
+      "Be careful around the Poison Nodes. I've seen what they do to hands that get too close."
+    ],
+    "quest_cleared_light": [
+      "You did it. The water's clear again — I can see the stones at the bottom, like when we were small."
+    ],
+    "quest_cleared_poison": [
+      "You're different now. I'm glad you're back… but I miss the way you used to laugh."
+    ],
+    "high_corruption": [
+      "Your hands are cold. And your eyes… don't look at me like that. Please."
+    ],
+    "high_virtue": [
+      "You glow a little, you know. Like the lantern you carry never went out."
+    ]
+  }
+}

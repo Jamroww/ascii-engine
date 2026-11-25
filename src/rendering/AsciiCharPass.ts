@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GlyphAtlas } from './GlyphAtlas';
 import { yToZ } from '../core/world';
+import { CHARACTER_MODEL_FACTORIES } from './Characters';
 
 const CHAR_VERTEX_SHADER = /* glsl */ `
   varying vec2 vUv;
@@ -15,6 +16,7 @@ const CHAR_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uAtlas;
   uniform vec2 uAtlasGrid;
   uniform vec2 uCharGrid;
+  uniform float uDashStrength;
 
   varying vec2 vUv;
 
@@ -53,6 +55,8 @@ const CHAR_FRAGMENT_SHADER = /* glsl */ `
     // Warm pale cloak with a bright rim so the traveler is unmistakable at
     // the finer zoomed-out scale.
     vec3 finalColor = mix(texColor.rgb * 1.5, vec3(1.0, 0.94, 0.84), clamp(lum * 0.85, 0.0, 1.0));
+    // Subtle cool afterimage tint while dashing.
+    finalColor = mix(finalColor, vec3(0.45, 0.8, 1.0), uDashStrength);
     gl_FragColor = vec4(finalColor, 1.0);
   }
 `;
@@ -243,6 +247,7 @@ export class AsciiCharPass {
       uAtlas: { value: atlas.texture },
       uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
       uCharGrid: { value: new THREE.Vector2(24, 28) },
+      uDashStrength: { value: 0 },
     };
 
     this.charMaterial = new THREE.ShaderMaterial({
@@ -267,6 +272,10 @@ export class AsciiCharPass {
     this.shadowMesh.position.set(0.05, -0.55, 0.53);
 
     this.group.add(this.shadowMesh, this.charMesh);
+
+    // Swap the procedural rig for the shared 3D hooded-cloak traveler model
+    // (with its hip lantern) baked through the same ASCII shader.
+    this.attachModel(CHARACTER_MODEL_FACTORIES.player_traveler());
   }
 
   public update(
@@ -278,7 +287,8 @@ export class AsciiCharPass {
     aimX: number,
     aimY: number,
     worldX: number,
-    worldY: number
+    worldY: number,
+    dashing: boolean
   ): void {
     this.group.position.set(worldX, worldY, 0);
 
@@ -289,6 +299,7 @@ export class AsciiCharPass {
     const speed = Math.hypot(moveX, moveY);
     const sink = wading ? -0.24 : 0;
     const breathe = Math.sin(this.walkPhase) * 0.03;
+    const facingRoot = this.attachedModel ?? this.charRig;
 
     // Face the aim direction (toward the mouse) rather than the movement.
     const aimLen = Math.hypot(aimX, aimY);
@@ -298,10 +309,19 @@ export class AsciiCharPass {
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
       this.facingAngle += diff * Math.min(1, dt * 14);
-      this.charRig.rotation.y = this.facingAngle;
+      facingRoot.rotation.y = this.facingAngle;
     }
 
-    if (speed > 0.05) {
+    if (this.attachedModel) {
+      // External 3D model: face the aim and bob gently; limb animation is
+      // skipped because the rig's bones belong to the detached procedural rig.
+      this.walkPhase += dt * (speed > 0.05 ? (sprint ? 14 : 9) : 2.2);
+      const bob =
+        speed > 0.05
+          ? Math.abs(Math.cos(this.walkPhase)) * 0.06
+          : Math.sin(this.walkPhase) * 0.02;
+      this.attachedModel.position.y = sink + bob;
+    } else if (speed > 0.05) {
       // Walk / sprint cycle.
       this.walkPhase += dt * (sprint ? 14 : 9);
       const swing = Math.sin(this.walkPhase) * (sprint ? 0.7 : 0.5);
@@ -329,6 +349,11 @@ export class AsciiCharPass {
       0.75 + Math.sin(this.walkPhase * 1.7) * 0.12 + Math.sin(this.walkPhase * 5.3) * 0.08;
     this.lanternCoreMat.emissiveIntensity = 1.8 + flicker * 0.9;
     this.lanternLight.intensity = flicker * 1.1;
+
+    // Brief cool afterimage tint while dashing.
+    this.charMaterial.uniforms.uDashStrength.value = dashing
+      ? 0.35 + 0.25 * Math.sin(this.walkPhase * 40)
+      : 0;
   }
 
   public render(renderer: THREE.WebGLRenderer): void {

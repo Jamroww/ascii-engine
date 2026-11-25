@@ -22,6 +22,8 @@ export interface Enemy {
   state: EnemyState;
   stateTimer: number;
   hitFlashTimer: number;
+  /** Remaining seconds of a Radiant Burst stun; pauses AI while > 0. */
+  stunTimer: number;
   /** The last weapon swing that already connected, so a swing hits once. */
   lastHitSwingId: number;
 }
@@ -122,6 +124,7 @@ export class EnemyManager {
       state: 'idle',
       stateTimer: 0,
       hitFlashTimer: 0,
+      stunTimer: 0,
       lastHitSwingId: -1,
     });
     return this.enemies[this.enemies.length - 1];
@@ -155,7 +158,12 @@ export class EnemyManager {
       const nx = dx / dist;
       const ny = dy / dist;
 
-      if (archetype.kind === 'melee') {
+      if (enemy.stunTimer > 0) {
+        // Stunned: freeze AI and momentum, then count down.
+        enemy.stunTimer = Math.max(0, enemy.stunTimer - dt);
+        enemy.vx = 0;
+        enemy.vy = 0;
+      } else if (archetype.kind === 'melee') {
         this.updateMeleeEnemy(enemy, archetype, dt, dist, nx, ny);
       } else {
         this.updateRangedEnemy(enemy, archetype, dt, dist, nx, ny, px, py);
@@ -179,8 +187,8 @@ export class EnemyManager {
       enemy.kbx *= kbDecay;
       enemy.kby *= kbDecay;
 
-      // Melee contact: only the stalker's lunge bites.
-      if (archetype.kind === 'melee' && enemy.state === 'attack') {
+      // Melee contact: only the stalker's lunge bites (never while stunned).
+      if (archetype.kind === 'melee' && enemy.state === 'attack' && enemy.stunTimer <= 0) {
         const d = Math.hypot(px - enemy.x, py - enemy.y);
         if (d < archetype.radius + PLAYER_RADIUS) this.hitPlayer(enemy, archetype);
       }
@@ -316,6 +324,19 @@ export class EnemyManager {
   }
 
   // --- Combat ----------------------------------------------------------------
+
+  /**
+   * Radiant Burst: deal light damage and stun every enemy within `radius` of
+   * the player. Dead enemies are filtered out by the next `update()` pass.
+   */
+  public radiantBurst(x: number, y: number, radius: number, damage: number, stunDuration: number): void {
+    for (const enemy of this.enemies) {
+      const d = Math.hypot(enemy.x - x, enemy.y - y);
+      if (d > radius) continue;
+      enemy.hp -= damage;
+      enemy.stunTimer = Math.max(enemy.stunTimer, stunDuration);
+    }
+  }
 
   /** Player sword sweeps damage each enemy at most once per swing. */
   private resolveSwordHits(px: number, py: number): void {

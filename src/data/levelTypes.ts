@@ -5,7 +5,15 @@
 // procedural fill, the player spawn, and every manually placed entity. This is
 // the shape the upcoming dev editor will read/write as JSON.
 
-export type EntityKind = 'building' | 'tree' | 'boulder' | 'enemy' | 'npc' | 'node' | 'shrine';
+export type EntityKind =
+  | 'building'
+  | 'tree'
+  | 'boulder'
+  | 'enemy'
+  | 'npc'
+  | 'node'
+  | 'shrine'
+  | 'prop';
 
 export interface PlacedEntity {
   id: string;
@@ -15,6 +23,8 @@ export interface PlacedEntity {
   y: number;
   /** Collider radius in world units. Optional for entities that derive it from their asset. */
   radius?: number;
+  /** Shrine-only: true renders the purified warm-gold state. */
+  purified?: boolean;
 }
 
 export interface LevelData {

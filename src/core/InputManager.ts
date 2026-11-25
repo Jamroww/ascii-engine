@@ -17,14 +17,33 @@ export class InputManager implements IInputManager {
   private mouseNdc: Vec2 = { x: 0, y: 0 };
   private wheelDelta = 0;
   private attackQueued = false;
+  private dashQueued = false;
+  private interactQueued = false;
+  private lightAbilityQueued = false;
+  private cancelQueued = false;
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (MOVE_KEYS.has(event.code)) {
       event.preventDefault();
     }
-    if (event.code === 'Space') {
-      event.preventDefault();
-      if (!event.repeat) this.attackQueued = true;
+    if (!event.repeat) {
+      switch (event.code) {
+        case 'Space':
+          event.preventDefault();
+          this.dashQueued = true;
+          break;
+        case 'KeyE':
+          this.interactQueued = true;
+          break;
+        case 'KeyQ':
+          this.lightAbilityQueued = true;
+          break;
+        case 'Escape':
+          this.cancelQueued = true;
+          break;
+        default:
+          break;
+      }
     }
     this.pressed.add(event.code);
   };
@@ -92,10 +111,38 @@ export class InputManager implements IInputManager {
     };
   }
 
-  /** True once per attack (left click or Space), then cleared. */
+  /** True once per sword swing (left click only), then cleared. */
   takeAttack(): boolean {
     const value = this.attackQueued;
     this.attackQueued = false;
+    return value;
+  }
+
+  /** True once per dash press (Space), then cleared. */
+  consumeDash(): boolean {
+    const value = this.dashQueued;
+    this.dashQueued = false;
+    return value;
+  }
+
+  /** True once per interact press (E), then cleared. */
+  consumeInteract(): boolean {
+    const value = this.interactQueued;
+    this.interactQueued = false;
+    return value;
+  }
+
+  /** True once per light-ability press (Q), then cleared. */
+  consumeLightAbility(): boolean {
+    const value = this.lightAbilityQueued;
+    this.lightAbilityQueued = false;
+    return value;
+  }
+
+  /** True once per cancel press (Escape), then cleared. */
+  consumeCancel(): boolean {
+    const value = this.cancelQueued;
+    this.cancelQueued = false;
     return value;
   }
 
