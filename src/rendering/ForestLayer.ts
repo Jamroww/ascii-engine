@@ -84,23 +84,18 @@ const TREE_FRAGMENT_SHADER = /* glsl */ `
 
     float glyphAlpha = texture2D(uAtlas, atlasUv).a;
 
-    // Solid dark canopy/bark core so swaying grass never bleeds through trees
+    // Cool dark canopy/bark backing so swaying grass never bleeds through trees
     if (glyphAlpha < 0.15) {
-      gl_FragColor = vec4(0.03, 0.04, 0.05, 0.92);
+      gl_FragColor = vec4(0.05, 0.06, 0.07, 0.92);
       return;
     }
 
-    float flicker = 1.0 + sin(uTime * 6.5) * 0.025 + sin(uTime * 13.7) * 0.015;
+    // Even moonlit visibility; a subtle warm lantern accent near the traveler.
     float dist = distance(vWorldPos, uPlayerPos);
-    float lantern = smoothstep(11.5 * flicker, 0.6, dist);
-    lantern *= lantern;
+    float warm = smoothstep(7.0, 0.5, dist);
+    vec3 color = vColor + vec3(0.15, 0.09, 0.03) * warm * 0.5;
 
-    // Deep forest twilight ambient + warm #FF9900 lantern catch
-    vec3 ambient = vColor * vec3(0.40, 0.48, 0.56);
-    vec3 lanternTint = vec3(1.0, 0.66, 0.26);
-    vec3 lit = vColor * mix(vec3(1.0), lanternTint, 0.50) * lantern * 1.6;
-
-    gl_FragColor = vec4(ambient + lit, 1.0);
+    gl_FragColor = vec4(color, 1.0);
   }
 `;
 
@@ -150,26 +145,26 @@ function buildTreeAsset(kind: TreeKind, rows: string[], trunkHeight: number): Tr
 
       if (kind === 'wilted') {
         // Pale ash-slate deadwood with a cool moonlight rim.
-        cr = 0.32 * bodyShade + rim * 0.16;
-        cg = 0.34 * bodyShade + rim * 0.18;
-        cb = 0.36 * bodyShade + rim * 0.22;
+        cr = 0.32 * bodyShade + rim * 0.18;
+        cg = 0.34 * bodyShade + rim * 0.20;
+        cb = 0.36 * bodyShade + rim * 0.24;
       } else if (isTrunk) {
-        // Deep shadowed bark, catching a faint umber side light.
-        const barkShade = 0.62 + (1.0 - distFromCenter) * 0.32;
-        cr = 0.34 * barkShade;
-        cg = 0.24 * barkShade;
-        cb = 0.16 * barkShade;
+        // Warm dark russet / burnt-umber bark (#7a311e), lit rim fading to shadow.
+        const barkShade = 0.55 + (1.0 - distFromCenter) * 0.35;
+        cr = 0.44 * barkShade + rim * 0.12;
+        cg = 0.18 * barkShade + rim * 0.06;
+        cb = 0.10 * barkShade + rim * 0.03;
       } else if (kind === 'pine') {
-        // Dark boreal pine: cool blue-sage rim on sunlit boughs.
-        cr = 0.1 * bodyShade + rim * 0.14;
-        cg = 0.3 * bodyShade + rim * 0.2;
-        cb = 0.22 * bodyShade + rim * 0.26;
+        // Deep-sage canopy (#4e6b58) with autumn-rust lit rims.
+        cr = 0.22 * bodyShade + rim * 0.28;
+        cg = 0.32 * bodyShade + rim * 0.16;
+        cb = 0.24 * bodyShade + rim * 0.10;
       } else {
-        // Gnarled oak: sage/umber canopy with mossy accents.
+        // Gnarled oak: deep-sage canopy with autumn-rust / mossy accents.
         const isMoss = char === ':' || char === ',' || char === ';';
-        cr = (isMoss ? 0.15 : 0.12) * bodyShade + rim * 0.2;
-        cg = (isMoss ? 0.33 : 0.28) * bodyShade + rim * 0.16;
-        cb = (isMoss ? 0.2 : 0.17) * bodyShade + rim * 0.08;
+        cr = (isMoss ? 0.32 : 0.24) * bodyShade + rim * 0.30;
+        cg = (isMoss ? 0.32 : 0.28) * bodyShade + rim * 0.14;
+        cb = (isMoss ? 0.20 : 0.18) * bodyShade + rim * 0.08;
       }
 
       const swayWeight = isTrunk ? 0.0 : Math.max(0.15, (y - trunkHeight + 1) / (height - trunkHeight));
@@ -366,9 +361,10 @@ export class ForestLayer implements IRenderLayer {
         radius: asset.trunkRadius * scale,
       });
 
-      // Tree shadow disc right above grass
-      dummy.position.set(p.worldX, p.worldY + 0.2 * scale, 0.51);
-      dummy.scale.set(asset.width * size * 0.85, asset.width * size * 0.42, 1);
+      // Soft elongated grounding shadow, offset down-right (south-east) from the
+      // object so it reads as cast by a moon high to the north-west.
+      dummy.position.set(p.worldX + 0.32 * scale, p.worldY - 0.42 * scale, 0.51);
+      dummy.scale.set(asset.width * size * 0.88, asset.width * size * 0.40, 1);
       dummy.updateMatrix();
       this.shadowMesh.setMatrixAt(t, dummy.matrix);
 

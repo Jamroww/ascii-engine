@@ -37,6 +37,8 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
   uniform float uWaterGlyphs[6];  // [ '.', ':', '-', '~', 'o', '*' ]
   uniform float uRockGlyphs[3];   // [ '#', '=', '.' ]
   uniform float uBlightGlyphs[4]; // [ '%', '?', '!', '#' ]
+  uniform float uMoonGlyphs[9];   // sparse -> dense: [ '-', '+', 'o', 'O', '0', '8', '%', '#', '@' ]
+  uniform float uCloudGlyphs[4];  // [ '.', ',', ':', '~' ]
   uniform int uLightCount;
   uniform vec3 uLightPos[${MAX_EXTRA_LIGHTS}];   // x, y, radius
   uniform vec3 uLightColor[${MAX_EXTRA_LIGHTS}]; // r, g, b
@@ -107,8 +109,8 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     // 1. Clip to river channel
     if (edgeDist > 0.0) discard;
 
-    // Deep cool-teal river bed behind glyphs (readable even outside the lantern)
-    vec3 bedColor = vec3(0.05, 0.09, 0.13);
+    // Pure-black obsidian mirror base (#030508) so reflected glyphs pop.
+    vec3 bedColor = vec3(0.012, 0.020, 0.031);
 
     // 2. Three faceted boulders with downstream wakes
     vec2 rock1 = vec2(6.8, -4.0);
@@ -121,7 +123,6 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     float rockDist = min(dRock1, min(dRock2, dRock3));
 
     if (rockDist < 0.0) {
-      // Pick active rock center for simple directional top-left shading
       vec2 activeRock = dRock1 < dRock2 ? (dRock1 < dRock3 ? rock1 : rock3)
                                         : (dRock2 < dRock3 ? rock2 : rock3);
       vec2 norm = normalize(cellWorld - activeRock + vec2(0.001));
@@ -149,6 +150,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     float blightMask = blightZone * smoothstep(0.32, 0.72, blightPulse);
 
     // 4. Directional current ribbons + boulder wakes + player wading ripple
+    //    (kept subtle on the mirror surface).
     vec2 flowUv = vec2(cellWorld.x * 0.75, cellWorld.y * 0.28 + uTime * 1.35);
     float ribbon = fbm(flowUv);
     float microRipple = noise(cellWorld * 1.4 + vec2(sin(uTime * 0.6) * 0.4, uTime * 2.1));
@@ -159,18 +161,41 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     );
     float bankFoam = smoothstep(-1.5, 0.0, edgeDist);
 
-    // Expanding ripple rings when the player is near or wading in the river
     float playerDist = distance(cellWorld, uPlayerPos);
     float wadeRing = sin(playerDist * 5.0 - uTime * 5.5) * 0.5 + 0.5;
     float wadeWake = smoothstep(3.2, 0.3, playerDist) * wadeRing * 0.55;
 
     float energy = clamp(
-      ribbon * 0.68 + microRipple * 0.3 + bankFoam * 0.75 + wake * 0.72 + wadeWake,
+      ribbon * 0.5 + microRipple * 0.22 + bankFoam * 0.55 + wake * 0.6 + wadeWake,
       0.0,
       1.0
     );
 
-    // 5. Shimmering lantern & world-light reflections on the dark mirror surface
+    // --- Reflected ASCII moon -------------------------------------------------
+    // Parallax: the moon drifts gently (30% of player movement) as you walk the
+    // riverbank. Horizontally rippled by a slow sine so the disc shimmers.
+    vec2 moonCenter = vec2(7.0, -2.0) + uPlayerPos * 0.30;
+    float moonRipple = sin(cellWorld.y * 2.2 + uTime * 0.55) * 0.42
+                     + sin(cellWorld.y * 4.6 - uTime * 0.8) * 0.16;
+    vec2 moonD = cellWorld - moonCenter;
+    moonD.x -= moonRipple;
+    float moonR = 2.9;
+    float moonDist = length(moonD);
+    float moonEdge = 1.0 - smoothstep(moonR * 0.80, moonR, moonDist);
+
+    // Procedural crater noise -> glyph density across the moon disc.
+    vec2 moonUv = moonD / moonR;
+    float crater = fbm(moonUv * 2.6 + vec2(3.1, -1.4));
+    float moonDensity = clamp(crater * 0.62 + (1.0 - moonDist / moonR) * 0.38, 0.0, 1.0);
+
+    // --- Drifting reflected clouds -------------------------------------------
+    vec2 cloudUv = cellWorld * 0.22 + vec2(uTime * 0.10, uTime * 0.03);
+    float cloud = smoothstep(0.48, 0.72, fbm(cloudUv));
+
+    // Moon brightness veiled by drifting clouds.
+    float moonBright = moonEdge * (0.55 + moonDensity * 0.45) * (1.0 - cloud * 0.55);
+
+    // --- Warm light reflections (lantern + cottage/lantern lights) ------------
     float shimmer = sin(cellWorld.y * 3.2 + uTime * 4.5 + ribbon * 4.0) * 0.35;
     vec2 refPlayerPos = uPlayerPos + vec2(shimmer, -0.8);
     float playerRefDist = length((cellWorld - refPlayerPos) * vec2(1.15, 0.65));
@@ -190,33 +215,85 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
       extraRefStrength += lf;
     }
 
-    // Keep calm deep water dark and quiet unless a reflection or Blight artifact hits it
-    float visibleThreshold = 0.24 - lanternRef * 0.18 - extraRefStrength * 0.18 - blightMask * 0.20;
-    if (energy < visibleThreshold) {
-      vec3 mirrorGlow = vec3(0.18, 0.10, 0.04) * lanternRef * 0.45 + extraRefColor * 0.25;
-      gl_FragColor = vec4(bedColor + mirrorGlow, 0.94);
-      return;
-    }
+    // --- Shoreline reflection band (muted bank/foliage, fading inward) --------
+    float shore = smoothstep(0.02, -0.4, edgeDist) * (1.0 - smoothstep(-3.6, -1.1, edgeDist));
 
-    // 6. Choose clean water glyph vs. glitching upstream Blight glyph
+    // --- Glyph + colour selection (priority: blight > moon > light > shore > cloud > flow)
+    vec3 color = bedColor;
     float idx = uWaterGlyphs[0];
-    bool isBlightGlyph = false;
+    float brightness = 1.0;
+    bool drew = false;
 
     if (blightMask > 0.42 && hash(gridCoord + floor(uTime * 3.5)) < blightMask * 0.65) {
-      isBlightGlyph = true;
+      // Toxic green/violet upstream Blight: static that overrides the mirror.
       int bSlot = int(floor(hash(gridCoord + floor(uTime * 5.0)) * 4.0));
       if (bSlot == 0) idx = uBlightGlyphs[0];
       else if (bSlot == 1) idx = uBlightGlyphs[1];
       else if (bSlot == 2) idx = uBlightGlyphs[2];
       else idx = uBlightGlyphs[3];
-    } else {
-      float normE = clamp((energy - visibleThreshold) / max(1.0 - visibleThreshold, 0.01), 0.0, 1.0);
+      float violetMix = hash(gridCoord * 1.7 + floor(uTime * 2.0));
+      color = mix(vec3(0.24, 0.88, 0.42), vec3(0.62, 0.24, 0.86), violetMix);
+      brightness = 1.3;
+      drew = true;
+    } else if (moonBright > 0.04) {
+      // Reflected moon: bright silver-white disc, density-mapped through the atlas.
+      float m = moonDensity;
+      idx = uMoonGlyphs[0];
+      idx = mix(idx, uMoonGlyphs[1], step(0.14, m));
+      idx = mix(idx, uMoonGlyphs[2], step(0.28, m));
+      idx = mix(idx, uMoonGlyphs[3], step(0.42, m));
+      idx = mix(idx, uMoonGlyphs[4], step(0.56, m));
+      idx = mix(idx, uMoonGlyphs[5], step(0.70, m));
+      idx = mix(idx, uMoonGlyphs[6], step(0.82, m));
+      idx = mix(idx, uMoonGlyphs[7], step(0.92, m));
+      idx = mix(idx, uMoonGlyphs[8], step(0.98, m));
+      color = vec3(0.84, 0.88, 0.97) * (0.6 + moonBright);
+      brightness = 1.0;
+      drew = true;
+    } else if (lanternRef > 0.06 || extraRefStrength > 0.06) {
+      // Warm lantern / cottage reflections rippling brightly on the black mirror.
+      float s = max(lanternRef, extraRefStrength);
+      idx = s > 0.45 ? uMoonGlyphs[8] : (s > 0.22 ? uMoonGlyphs[6] : uMoonGlyphs[3]);
+      vec3 lightCol = vec3(1.0, 0.62, 0.18) * lanternRef + extraRefColor;
+      color = clamp(lightCol * (0.6 + s), 0.0, 1.4);
+      brightness = 1.0;
+      drew = true;
+    } else if (shore > 0.02) {
+      // Rippling horizontal reflections of the bank foliage (emerald/umber bands).
+      float band = sin(cellWorld.y * 1.9 + uTime * 0.7 + cellWorld.x * 0.4);
+      idx = uWaterGlyphs[3]; // '~'
+      idx = mix(idx, uWaterGlyphs[2], step(0.0, band)); // '-'
+      vec3 foliageA = vec3(0.20, 0.45, 0.30); // muted emerald
+      vec3 foliageB = vec3(0.45, 0.30, 0.16); // warm umber
+      color = mix(foliageA, foliageB, step(0.0, band)) * (0.4 + shore * 0.6);
+      brightness = 1.0;
+      drew = true;
+    } else if (cloud > 0.02) {
+      // Drifting dim silver-grey mist, sparse glyphs, partially veiling the moon.
+      float cSlot = hash(gridCoord + floor(uTime * 1.0));
+      idx = cSlot > 0.7 ? uCloudGlyphs[3] : (cSlot > 0.45 ? uCloudGlyphs[2] : (cSlot > 0.2 ? uCloudGlyphs[1] : uCloudGlyphs[0]));
+      color = vec3(0.5, 0.55, 0.62) * (0.25 + cloud * 0.5);
+      brightness = 0.8;
+      drew = true;
+    } else if (energy > 0.30) {
+      // Faint silver flow ripples on otherwise calm water.
+      float normE = clamp((energy - 0.30) / 0.70, 0.0, 1.0);
       int gSlot = int(clamp(floor(normE * 6.0), 0.0, 5.0));
       if (gSlot == 1) idx = uWaterGlyphs[1];
       else if (gSlot == 2) idx = uWaterGlyphs[2];
       else if (gSlot == 3) idx = uWaterGlyphs[3];
       else if (gSlot == 4) idx = uWaterGlyphs[4];
       else if (gSlot >= 5) idx = uWaterGlyphs[5];
+      color = vec3(0.34, 0.42, 0.50) * (0.3 + normE * 0.4);
+      brightness = 0.9;
+      drew = true;
+    }
+
+    if (!drew) {
+      // Calm deep water: pure obsidian mirror with a faint rippled sheen.
+      float sheen = microRipple * 0.05;
+      gl_FragColor = vec4(bedColor + vec3(0.02, 0.03, 0.045) * sheen, 0.94);
+      return;
     }
 
     float glyphAlpha = sampleGlyph(idx, cellUv);
@@ -225,28 +302,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
       return;
     }
 
-    // 7. Color: dark slate-blue -> crisp pale foam -> warm #FF9900 reflection / Blight corruption
-    vec3 deepWater = vec3(0.16, 0.28, 0.38);
-    vec3 foamColor = vec3(0.78, 0.86, 0.92);
-    vec3 waterColor = mix(deepWater, foamColor, smoothstep(0.50, 0.92, energy));
-
-    // Apply warm #FF9900 lantern reflection (suppressed where Blight turns water into static)
-    vec3 warmReflect = vec3(1.0, 0.62, 0.18);
-    float cleanReflect = (1.0 - blightMask * 0.8);
-    waterColor = mix(waterColor, warmReflect, clamp(lanternRef * 0.78 * cleanReflect, 0.0, 0.85));
-    waterColor += extraRefColor * 0.65 * cleanReflect;
-
-    // Apply toxic green/violet Blight tint upstream
-    if (isBlightGlyph) {
-      float violetMix = hash(gridCoord * 1.7 + floor(uTime * 2.0));
-      vec3 blightCol = mix(vec3(0.24, 0.88, 0.42), vec3(0.62, 0.24, 0.86), violetMix);
-      waterColor = blightCol;
-    } else if (blightMask > 0.1) {
-      waterColor = mix(waterColor, vec3(0.18, 0.42, 0.28), blightMask * 0.55);
-    }
-
-    float brightness = 0.62 + lanternRef * 0.6 + extraRefStrength * 0.55 + (isBlightGlyph ? 0.45 : 0.0);
-    gl_FragColor = vec4(waterColor * brightness, 1.0);
+    gl_FragColor = vec4(color * brightness, 1.0);
   }
 `;
 
@@ -279,6 +335,26 @@ export class WaterLayer implements IRenderLayer {
       atlas.getIndex('#'),
     ];
 
+    // Sparse -> dense: the reflected moon maps crater noise into these glyphs.
+    const moonGlyphs = [
+      atlas.getIndex('-'),
+      atlas.getIndex('+'),
+      atlas.getIndex('o'),
+      atlas.getIndex('O'),
+      atlas.getIndex('0'),
+      atlas.getIndex('8'),
+      atlas.getIndex('%'),
+      atlas.getIndex('#'),
+      atlas.getIndex('@'),
+    ];
+
+    const cloudGlyphs = [
+      atlas.getIndex('.'),
+      atlas.getIndex(','),
+      atlas.getIndex(':'),
+      atlas.getIndex('~'),
+    ];
+
     this.material = new THREE.ShaderMaterial({
       vertexShader: WATER_VERTEX_SHADER,
       fragmentShader: WATER_FRAGMENT_SHADER,
@@ -294,6 +370,8 @@ export class WaterLayer implements IRenderLayer {
         uWaterGlyphs: { value: waterGlyphs },
         uRockGlyphs: { value: rockGlyphs },
         uBlightGlyphs: { value: blightGlyphs },
+        uMoonGlyphs: { value: moonGlyphs },
+        uCloudGlyphs: { value: cloudGlyphs },
         uLightCount: { value: 0 },
         uLightPos: {
           value: Array.from({ length: MAX_EXTRA_LIGHTS }, () => new THREE.Vector3()),

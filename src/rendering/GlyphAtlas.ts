@@ -7,7 +7,8 @@ export const DEFAULT_CHARSET =
   '/\\|~_^\'"`' +
   'oO0()[]{}' +
   'vV^<>!?' +
-  'abcdefghijklmnopqrstuvwxyz';
+  'abcdefghijklmnopqrstuvwxyz' +
+  '8'; // appended (index 62) so the reflected moon has a dense '8' glyph to use
 
 export class GlyphAtlas {
   public readonly texture: THREE.CanvasTexture;

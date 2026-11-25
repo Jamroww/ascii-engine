@@ -147,6 +147,7 @@ export class Engine {
 
   public setTerrain(terrain: TerrainGrid): void {
     this.terrain = terrain;
+    this.atmosphere.setTerrain(terrain);
   }
 
   public setLevelManager(levelManager: LevelManager): void {

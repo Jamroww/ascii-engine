@@ -276,8 +276,8 @@ export class AsciiCharPass {
     this.charMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.7, 3.1), this.charMaterial);
     this.charMesh.position.set(0, 0.9, yToZ(0));
 
-    this.shadowMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.55), this.groundShadowMaterial);
-    this.shadowMesh.position.set(0.05, -0.55, 0.53);
+    this.shadowMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.52), this.groundShadowMaterial);
+    this.shadowMesh.position.set(0.32, -0.6, 0.51);
 
     this.group.add(this.shadowMesh, this.charMesh);
 
@@ -302,7 +302,7 @@ export class AsciiCharPass {
 
     // Unified Y-based depth: the billboard sorts with trees/buildings/enemies.
     this.charMesh.position.z = yToZ(worldY);
-    this.shadowMesh.position.z = 0.53;
+    this.shadowMesh.position.z = 0.51;
 
     const speed = Math.hypot(moveX, moveY);
     const sink = wading ? -0.24 : 0;

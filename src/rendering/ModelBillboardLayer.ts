@@ -334,18 +334,27 @@ export class ModelBillboardLayer implements IRenderLayer {
     if (placement.kind === 'npc') {
       material.uniforms.uLumLift.value = 0.22;
       material.uniforms.uMinLuminance.value = 0.34;
-    } else if (placement.kind === 'building') {
-      material.uniforms.uLumLift.value = 0.12;
+    } else {
+      // Clean moonlit floor for cottages, docks, bridges, rocks and shrines:
+      // lift unlit ambient areas into cool silver-slate midtones instead of a
+      // muddy black box.
+      material.uniforms.uLumLift.value = 0.16;
+      material.uniforms.uMinLuminance.value = 0.14;
     }
 
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(worldWidth, worldHeight), material);
     // Anchor the quad's base at the entity's ground position.
     mesh.position.set(placement.x, placement.y + worldHeight / 2, yToZ(placement.y));
 
-    // Subtle dark grounding shadow oval underneath, just above the grass/water.
+    // Subtle dark grounding shadow oval, offset down-right (south-east) so it
+    // reads as cast by a moon high to the north-west.
     const shadowMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.shadowMaterial);
-    shadowMesh.scale.set(worldWidth * 0.9, Math.max(worldWidth * 0.4, 0.45), 1);
-    shadowMesh.position.set(placement.x, placement.y + 0.05, 0.52);
+    shadowMesh.scale.set(worldWidth * 0.92, Math.max(worldWidth * 0.4, 0.45), 1);
+    shadowMesh.position.set(
+      placement.x + worldWidth * 0.16,
+      placement.y - Math.max(worldWidth * 0.2, 0.15),
+      0.51
+    );
 
     const halo = this.createHalo(placement, worldWidth);
 

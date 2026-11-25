@@ -58,7 +58,6 @@ const GRASS_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uAtlas;
   uniform vec2 uAtlasGrid;
   uniform vec2 uPlayerPos;
-  uniform float uTime;
 
   varying vec2 vUv;
   varying float vGlyphIndex;
@@ -79,24 +78,22 @@ const GRASS_FRAGMENT_SHADER = /* glsl */ `
     float alpha = texture2D(uAtlas, atlasUv).a;
     if (alpha < 0.15) discard;
 
-    // Match the flickering torchlight from GroundLayer
-    float flicker = 1.0 + sin(uTime * 7.0) * 0.03 + sin(uTime * 13.0) * 0.02;
+    // Gentle tip highlight so dense grass reads with depth (not bright streaks).
+    float tipGlow = mix(0.86, 1.04, vUv.y);
+
+    // Even moonlit visibility across the whole carpet; the lantern is only a
+    // subtle warm accent hugging the traveler, never the sole light source.
+    vec3 base = vColor * tipGlow;
     float dist = distance(vWorldPos, uPlayerPos);
-    float torchLight = smoothstep(11.0 * flicker, 0.5, dist);
-
-    // Gentle tip highlight so dense grass reads with depth (not bright streaks)
-    float tipGlow = mix(0.8, 1.02, vUv.y);
-
-    vec3 ambient = vColor * 0.23 * tipGlow;
-    vec3 torchTint = vec3(1.0, 0.72, 0.46);
-    vec3 lit = vColor * mix(vec3(1.0), torchTint, 0.42) * torchLight * 1.05 * tipGlow;
+    float warm = smoothstep(6.0, 0.4, dist);
+    base += vec3(0.16, 0.10, 0.03) * warm * 0.5;
 
     // Dark radial depression under the player's feet so the traveler pops.
     float footDist = distance(vWorldPos, uPlayerPos);
-    float depression = smoothstep(1.8, 0.15, footDist) * 0.45;
-    float shadow = (1.0 - vBend * 0.3) * (1.0 - depression);
+    float depression = smoothstep(1.7, 0.15, footDist) * 0.28;
+    float shadow = (1.0 - vBend * 0.22) * (1.0 - depression);
 
-    gl_FragColor = vec4((ambient + lit) * shadow, alpha);
+    gl_FragColor = vec4(base * shadow, alpha);
   }
 `;
 
@@ -155,21 +152,26 @@ export class GrassLayer implements IRenderLayer {
       phases[i] = Math.random() * Math.PI * 2;
 
       const roll = Math.random();
-      if (roll < 0.02) {
-        // Rare muted sage accent (young shoot / dew) so the field stays one
-        // cohesive deep-forest green with no bright confetti to fight the player.
+      if (roll < 0.012) {
+        // Sparse warm-cream wildflower pinpoint.
+        glyphIndices[i] = atlas.getIndex(Math.random() < 0.5 ? '*' : 'o');
+        colors[i * 3 + 0] = 0.94;
+        colors[i * 3 + 1] = 0.82;
+        colors[i * 3 + 2] = 0.58;
+      } else if (roll < 0.025) {
+        // Sparse pale-white dewdrop glint.
         glyphIndices[i] = atlas.getIndex('.');
-        colors[i * 3 + 0] = 0.26;
-        colors[i * 3 + 1] = 0.4;
-        colors[i * 3 + 2] = 0.28;
+        colors[i * 3 + 0] = 0.86;
+        colors[i * 3 + 1] = 0.92;
+        colors[i * 3 + 2] = 0.98;
       } else {
-        // Lush, layered deeper forest-green blades.
+        // Lush, evenly readable deep pine / emerald-teal blades.
         const char = bladeChars[Math.floor(Math.random() * bladeChars.length)];
         glyphIndices[i] = atlas.getIndex(char);
-        const shade = 0.4 + Math.random() * 0.45;
-        colors[i * 3 + 0] = 0.08 * shade;
-        colors[i * 3 + 1] = 0.32 * shade;
-        colors[i * 3 + 2] = 0.17 * shade;
+        const shade = 0.75 + Math.random() * 0.5;
+        colors[i * 3 + 0] = 0.13 * shade;
+        colors[i * 3 + 1] = 0.34 * shade;
+        colors[i * 3 + 2] = 0.22 * shade;
       }
 
       i++;

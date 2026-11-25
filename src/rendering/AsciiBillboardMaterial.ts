@@ -60,9 +60,9 @@ const BILLBOARD_FRAGMENT_SHADER = /* glsl */ `
 
     float glyphAlpha = texture2D(uAtlas, atlasUv).a;
     if (glyphAlpha < 0.15) {
-      // Near-opaque dark silhouette backing behind non-transparent pixels so
-      // grass and ground never bleed through the model.
-      gl_FragColor = vec4(0.03, 0.04, 0.05, 0.92 * uAlpha);
+      // Cool dark moonlit-slate backing behind non-transparent pixels so grass
+      // and ground never bleed through the model (no muddy pure-black box).
+      gl_FragColor = vec4(0.05, 0.07, 0.10, 0.92 * uAlpha);
       return;
     }
 
@@ -70,6 +70,13 @@ const BILLBOARD_FRAGMENT_SHADER = /* glsl */ `
     //    green/violet blight veins, golden shrines). A slight lift keeps the
     //    twilight palette legible against the dark ground.
     vec3 color = tex.rgb * 1.35;
+
+    // Unlit / ambient areas sit on a clean cool silver-slate floor instead of
+    // crushing to black. The lift is tied to uLumLift so only the moonlit
+    // billboards (cottages/docks/bridges/rocks/NPCs) get it, never enemies.
+    float lumRaw = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
+    float ambientMix = 1.0 - smoothstep(0.08, 0.42, lumRaw);
+    color = mix(color, vec3(0.38, 0.45, 0.55), ambientMix * clamp(uLumLift * 2.5, 0.0, 0.6));
 
     // White hit-flash.
     color = mix(color, vec3(1.0), uFlash);

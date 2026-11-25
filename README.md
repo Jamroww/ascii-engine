@@ -2,8 +2,10 @@
 
 A lightweight browser ASCII-game engine built on **Three.js** and **Vite** (TypeScript).
 Everything on screen — ground, grass, water, forest, buildings, characters, enemies, the
-weather — is rendered as a grid of glyphs from a single character atlas, with a dark "wilted
-forest" aesthetic.
+weather — is rendered as a grid of glyphs from a single character atlas, with a moody,
+moonlit "wilted forest" aesthetic: the whole viewport stays crisp and readable (no
+flashlight circle), while the river reads as a pure-black mirror reflecting a rippling
+ASCII moon and drifting clouds.
 
 The current scene is a **Riverside Village** in a top-down clearing: a dense swaying forest
 framing a village clearing, cottages with glowing windows, a winding river that carries an
@@ -133,13 +135,13 @@ ascii-engine/
     │
     ├── rendering/          # All visual layers + shaders
     │   ├── GlyphAtlas.ts   # Character atlas texture + getIndex()
-    │   ├── GroundLayer.ts  # Forest-floor grid (dirt path, leaves, moss)
-    │   ├── GrassLayer.ts   # Swaying grass blades
-    │   ├── WaterLayer.ts   # River shader: flow, boulders+wakes, blight, reflections
-    │   ├── ForestLayer.ts  # Procedural trees + wind sway + trunk colliders
+    │   ├── GroundLayer.ts  # Forest-floor grid (warm earth path, slate contours, moss)
+    │   ├── GrassLayer.ts   # Swaying emerald grass + sparse wildflower/dewdrop pinpoints
+    │   ├── WaterLayer.ts   # River shader: obsidian mirror, reflected moon/clouds/shore, blight
+    │   ├── ForestLayer.ts  # Procedural trees + wind sway + trunk colliders + grounding shadows
     │   ├── BuildingLayer.ts # Legacy ASCII building sprites with emissive windows
     │   ├── WeatherLayer.ts # Rain, fireflies/spores, drifting petals
-    │   ├── AtmosphereLayer.ts # Vignette + distance fog overlay
+    │   ├── AtmosphereLayer.ts # Moonlit full-screen tint: soft edge vignette + blight haze
     │   ├── AsciiCharPass.ts # Offscreen 3D traveler → ASCII billboard + HUD portrait
     │   ├── AsciiModelBaker.ts # Shared offscreen bake rig (3D models → ASCII sprites)
     │   ├── AsciiBillboardMaterial.ts # ASCII billboard shader (luminance → glyph ramp)

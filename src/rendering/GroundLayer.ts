@@ -28,7 +28,6 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uAtlas;
   uniform vec2 uAtlasGrid;
   uniform vec2 uPlayerPos;
-  uniform float uTime;
 
   varying vec2 vUv;
   varying float vGlyphIndex;
@@ -50,16 +49,13 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
     float alpha = texture2D(uAtlas, atlasUv).a;
     if (alpha < 0.1) discard;
 
-    // Readable mossy-slate ambient with a warm lantern pool near the player.
-    float flicker = 1.0 + sin(uTime * 7.0) * 0.03 + sin(uTime * 13.0) * 0.02;
+    // Even moonlit visibility; the lantern is only a subtle warm accent near
+    // the traveler, so trails read clearly across the whole screen.
     float dist = distance(vWorldPos, uPlayerPos);
-    float torchLight = smoothstep(11.0 * flicker, 1.0, dist);
+    float warm = smoothstep(7.0, 0.5, dist);
+    vec3 color = vColor + vec3(0.14, 0.09, 0.03) * warm * 0.4;
 
-    vec3 ambient = vColor * 0.45;
-    vec3 torchTint = vec3(1.0, 0.70, 0.40);
-    vec3 lit = vColor * mix(vec3(1.0), torchTint, 0.42) * torchLight * 0.85;
-
-    gl_FragColor = vec4(ambient + lit, alpha);
+    gl_FragColor = vec4(color, alpha);
   }
 `;
 
@@ -145,28 +141,28 @@ export class GroundLayer implements IRenderLayer {
         let b: number;
 
         if (riverSdf > 0 && riverSdf < 1.7) {
-          // Muted silty shoreline foam/contour rim right at the water's edge.
+          // Cool slate shoreline contour rim right at the water's edge.
           char = bankChars[Math.floor(rand * bankChars.length)];
-          const shade = 0.6 + rand * 0.25;
-          r = 0.38 * shade;
-          g = 0.44 * shade;
-          b = 0.46 * shade;
+          const shade = 0.72 + rand * 0.28;
+          r = 0.42 * shade;
+          g = 0.48 * shade;
+          b = 0.52 * shade;
         } else if (pathMask > 0.9) {
           // Warm damp packed earth on the footpath.
           char = dirtChars[Math.floor(rand * dirtChars.length)];
-          const shade = 0.62 + rand * 0.38;
-          r = 0.44 * shade;
-          g = 0.3 * shade;
-          b = 0.17 * shade;
+          const shade = 0.78 + rand * 0.42;
+          r = 0.52 * shade;
+          g = 0.36 * shade;
+          b = 0.18 * shade;
         } else if (pathMask > 0.6) {
           // Drier, lighter highlight rim along the footpath edge.
           char = rimChars[Math.floor(rand * rimChars.length)];
-          const shade = 0.64 + rand * 0.36;
-          r = 0.52 * shade;
-          g = 0.38 * shade;
-          b = 0.22 * shade;
+          const shade = 0.8 + rand * 0.4;
+          r = 0.58 * shade;
+          g = 0.44 * shade;
+          b = 0.24 * shade;
         } else {
-          // Dark mossy slate forest floor with layered topographic contour bands.
+          // Mossy forest floor with layered slate topographic contour bands.
           const bands = 5;
           const bandPos = elevation * bands;
           const band = Math.floor(bandPos);
@@ -175,15 +171,17 @@ export class GroundLayer implements IRenderLayer {
 
           if (isContour) {
             char = contourChars[band % contourChars.length];
+            const shade = 0.78 + elevation * 0.4;
+            r = 0.40 * shade;
+            g = 0.44 * shade;
+            b = 0.48 * shade;
           } else {
             char = mossChars[Math.floor(rand * mossChars.length)];
+            const shade = 0.72 + elevation * 0.5;
+            r = 0.17 * shade;
+            g = 0.34 * shade;
+            b = 0.29 * shade;
           }
-
-          // Brighter on ridges, deeper in hollows, subtle rim on contour lines.
-          const shade = 0.66 + elevation * 0.5 + (isContour ? 0.16 : 0.0);
-          r = 0.16 * shade;
-          g = 0.32 * shade;
-          b = 0.27 * shade;
         }
 
         glyphIndices[i] = atlas.getIndex(char);
@@ -205,7 +203,6 @@ export class GroundLayer implements IRenderLayer {
         uAtlas: { value: atlas.texture },
         uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
         uPlayerPos: { value: new THREE.Vector2(0, 0) },
-        uTime: { value: 0 },
       },
       transparent: true,
       depthWrite: false,
@@ -228,7 +225,6 @@ export class GroundLayer implements IRenderLayer {
 
   public update(ctx: FrameContext): void {
     this.material.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
-    this.material.uniforms.uTime.value = ctx.elapsed;
   }
 
   public dispose(): void {
