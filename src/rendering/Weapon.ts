@@ -23,6 +23,7 @@ const WEAPON_VERTEX_SHADER = /* glsl */ `
 const WEAPON_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uAtlas;
   uniform vec2 uAtlasGrid;
+  uniform vec3 uTint;
 
   varying vec2 vUv;
   varying float vGlyphIndex;
@@ -45,8 +46,9 @@ const WEAPON_FRAGMENT_SHADER = /* glsl */ `
       return;
     }
 
-    // Always fully lit so the blade reads clearly against the dark ground.
-    gl_FragColor = vec4(vColor * 1.4, 1.0);
+    // Always fully lit so the blade reads clearly against the dark ground. The
+    // tint recolours the steel (warm gold for the Lantern Blade, neutral otherwise).
+    gl_FragColor = vec4(vColor * 1.4 * uTint, 1.0);
   }
 `;
 
@@ -120,10 +122,12 @@ export class Weapon {
   private swingCount = 0;
   private readonly swingDuration = 0.22;
 
+  private readonly tintColor = new THREE.Color(1, 1, 1);
+
   /** How far the blade reaches from the traveler's centre, in world units. */
-  public readonly reach = 1.9;
+  public reach = 1.9;
   /** Half the angular width of the swing arc, in radians. */
-  public readonly arcHalfAngle = Math.PI / 2.4;
+  public arcHalfAngle = Math.PI / 2.4;
 
   constructor(atlas: GlyphAtlas) {
     const sword = createSword();
@@ -142,6 +146,7 @@ export class Weapon {
       uniforms: {
         uAtlas: { value: atlas.texture },
         uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
+        uTint: { value: this.tintColor },
       },
       transparent: true,
       depthWrite: true,
@@ -191,15 +196,28 @@ export class Weapon {
       this.object3D.rotation.z = this.angle;
     }
 
-    // The hilt rides just ahead of the traveler, so the blade reaches outward.
-    // Sort with the player: a hair in front, or slightly behind when aiming
-    // north so the up-swing never floats above the canopy.
+    // The hilt rides tucked close to the body at hand/torso height (raised +0.75
+    // above the feet so it reads as held by the traveler, not planted at the
+    // ground). Sort with the player: a hair in front when aiming south, slightly
+    // behind when aiming north so the up-swing never floats above the canopy.
+    const orbitRadius = 0.5;
     const aimNorth = dirY > 0;
     this.object3D.position.set(
-      worldX + dirX * 0.4,
-      worldY + dirY * 0.4,
-      yToZ(worldY) + (aimNorth ? -0.015 : 0.015)
+      worldX + dirX * orbitRadius,
+      worldY + 0.75 + dirY * orbitRadius,
+      yToZ(worldY) + (aimNorth ? -0.02 : 0.02)
     );
+  }
+
+  /** Update the combat reach / arc from the equipped weapon. */
+  public setCombat(reach: number, arcHalfAngle: number): void {
+    this.reach = reach;
+    this.arcHalfAngle = arcHalfAngle;
+  }
+
+  /** Recolour the blade (e.g. warm gold for the Lantern Blade). */
+  public setTint(r: number, g: number, b: number): void {
+    this.tintColor.set(r, g, b);
   }
 
   public swing(): void {

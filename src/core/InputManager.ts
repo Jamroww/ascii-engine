@@ -21,6 +21,7 @@ export class InputManager implements IInputManager {
   private interactQueued = false;
   private lightAbilityQueued = false;
   private cancelQueued = false;
+  private inventoryQueued = false;
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (MOVE_KEYS.has(event.code)) {
@@ -37,6 +38,13 @@ export class InputManager implements IInputManager {
           break;
         case 'KeyQ':
           this.lightAbilityQueued = true;
+          break;
+        case 'KeyI':
+          this.inventoryQueued = true;
+          break;
+        case 'Tab':
+          event.preventDefault();
+          this.inventoryQueued = true;
           break;
         case 'Escape':
           this.cancelQueued = true;
@@ -143,6 +151,13 @@ export class InputManager implements IInputManager {
   consumeCancel(): boolean {
     const value = this.cancelQueued;
     this.cancelQueued = false;
+    return value;
+  }
+
+  /** True once per inventory press (I or Tab), then cleared. */
+  consumeInventory(): boolean {
+    const value = this.inventoryQueued;
+    this.inventoryQueued = false;
     return value;
   }
 

@@ -88,7 +88,7 @@ const enemyAssets = new Map<string, EnemyArchetype>([
       id: 'blight_stalker',
       maxHp: 40,
       speed: 6.5,
-      radius: 0.55,
+      radius: 0.7,
       aggroRange: 7,
       attackRange: 1.3,
       telegraphTime: 0.35,
@@ -142,7 +142,7 @@ const modelAssets = new Map<string, ModelAssetEntry>([
   ['npc_herbalist', { kind: 'npc', factory: CHARACTER_MODEL_FACTORIES.npc_herbalist, radius: 0.5 }],
   ['npc_elder', { kind: 'npc', factory: CHARACTER_MODEL_FACTORIES.npc_elder, radius: 0.5 }],
   // Enemies
-  ['blight_stalker', { kind: 'enemy', factory: ENEMY_MODEL_FACTORIES.blight_stalker, radius: 0.55 }],
+  ['blight_stalker', { kind: 'enemy', factory: ENEMY_MODEL_FACTORIES.blight_stalker, radius: 0.7 }],
   ['spore_spitter', { kind: 'enemy', factory: ENEMY_MODEL_FACTORIES.spore_spitter, radius: 0.6 }],
   ['blight_sentinel', { kind: 'enemy', factory: ENEMY_MODEL_FACTORIES.blight_sentinel, radius: 0.95 }],
   // Buildings

@@ -1,14 +1,15 @@
 # ascii-engine
 
 A lightweight browser ASCII-game engine built on **Three.js** and **Vite** (TypeScript).
-Everything on screen — ground, grass, water, forest, buildings, the player, weather — is
-rendered as a grid of glyphs from a single character atlas, with a dark "wilted forest"
-aesthetic.
+Everything on screen — ground, grass, water, forest, buildings, characters, enemies, the
+weather — is rendered as a grid of glyphs from a single character atlas, with a dark "wilted
+forest" aesthetic.
 
 The current scene is a **Riverside Village** in a top-down clearing: a dense swaying forest
-framing a village clearing, a cottage with glowing windows, a winding river that carries an
-upstream **Blight** (a toxic, glitching zone to the north), and a hooded traveler holding a
-sword that aims at the mouse.
+framing a village clearing, cottages with glowing windows, a winding river that carries an
+upstream **Blight** (a toxic zone to the north), a hooded traveler who fights **blighted
+enemies** with a sword, and a dual **Corruption / Virtue** alignment that drives the Act 1
+quest, *The Tainted Catch*.
 
 ---
 
@@ -27,16 +28,51 @@ The build step runs `tsc`, so `npm run build` is the quickest way to catch type 
 
 ## Controls
 
-| Input           | Action                                             |
-| --------------- | -------------------------------------------------- |
-| WASD / arrows   | Move                                               |
-| Shift           | Sprint (drains stamina)                            |
-| Mouse           | Aim — the character and sword face the cursor      |
-| Left-click / Space | Swing the sword                                  |
-| Scroll wheel    | Zoom camera in / out                               |
+| Input                 | Action                                                            |
+| --------------------- | ----------------------------------------------------------------- |
+| WASD / arrows         | Move                                                              |
+| Shift                 | Sprint (drains stamina)                                           |
+| Mouse                 | Aim — the character and sword face the cursor                     |
+| Left-click            | Swing the sword                                                   |
+| Space                 | Dash (becomes **Blight Dash** once Corruption ≥ 25)               |
+| Q                     | **Radiant Burst** — heal + stun/damage nearby (Virtue ≥ 25)        |
+| E                     | Interact — talk to NPCs, absorb Poison Nodes, purify Light Shrines |
+| I / Tab               | Open/close the **Gear & Quests** screen                           |
+| Esc                   | Close the dialogue or Gear & Quests screen                        |
+| Scroll wheel          | Zoom camera in / out                                              |
 
 Walking into the river slows you down and drains health (cold water); solid ground
 regenerates it. Sprinting drains stamina; standing still or walking regenerates it.
+
+---
+
+## Gear, Quests & Alignment
+
+### Inventory (`I` / `Tab`)
+
+The **Gear & Bag** tab shows the equipped weapon/armor, a live stat summary, and any bag
+items (click to equip/swap). Equipping pauses the world (same as dialogue) and rewires the
+stats immediately.
+
+| Item             | Kind   | Stats                                                                 |
+| ---------------- | ------ | --------------------------------------------------------------------- |
+| Iron Sword       | weapon | 20 DMG, standard reach (equipped by default)                          |
+| Lantern Blade    | weapon | 24 DMG, wider swing arc, warm-gold blade tint                         |
+| Traveler Cloak   | armor  | no bonuses (equipped by default)                                      |
+| River Leather    | armor  | +20% damage reduction, +20 max HP                                     |
+| Blight Weave     | armor  | +12% move speed, +25 max stamina, −10% defense                        |
+
+The extra starter items (Lantern Blade, River Leather, Blight Weave) begin in the bag so
+swapping is testable immediately. Definitions live in `src/data/items.ts`; live combat
+numbers are computed by `src/core/InventorySystem.ts` (`getCombatStats()`) and wired into
+`PlayerStats`, `Engine` and `EnemyManager` each gameplay frame.
+
+### Quests & alignment
+
+The **Quests** tab tracks *The Tainted Catch* (its current step + an alignment note). Quest
+updates surface only as brief fading toasts, plus the sidebar `[I]` button flashes when a
+step changes. Corruption comes from absorbing **Poison Nodes**, Virtue from purifying **Light
+Shrines** — each feeds the dual meter and unlocks Blight Dash / Radiant Burst respectively.
 
 ---
 
@@ -47,16 +83,16 @@ This is the core idea, and worth understanding before touching any layer.
 1. **`GlyphAtlas`** bakes a charset (ordered roughly by visual density) into a
    `CanvasTexture` — white glyphs on transparent, tinted later in shaders. Every layer
    asks it for an index via `atlas.getIndex(char)`.
-2. **Most layers** (`GroundLayer`, `GrassLayer`, `ForestLayer`, `BuildingLayer`, `Weapon`,
+2. **Most layers** (`GroundLayer`, `GrassLayer`, `ForestLayer`, `Weapon`, `EnemyLayer`,
    `WeatherLayer`) are `THREE.InstancedMesh`es. Each instance carries per-cell attributes
    (`aGlyphIndex`, `aColor`, and sometimes extra like `aSwayWeight` / `aEmissive`); the
    fragment shader quantizes world/UV coordinates into a crisp glyph grid and samples the
    atlas cell for that glyph.
-3. **The character** (`AsciiCharPass`) is different: a procedural 3D rig is rendered
-   offscreen to a 128×128 render target, then a billboard shader quantizes that texture
-   into an 18×22 glyph grid and maps **luminance → density ramp**, so the traveler is a
-   shaded ASCII figure rather than flat glyphs. The same render target is read back each
-   frame for the HUD portrait.
+3. **3D-baked billboards** (`AsciiModelBaker` → `AsciiBillboardMaterial`) render a small 3D
+   model once into a transparent render target, then a billboard shader quantizes that
+   texture into a glyph grid and maps **luminance → density ramp** (`.,:;-=+*#%@`). This
+   drives the player (`AsciiCharPass`), NPCs, buildings, shrines and enemies. The same
+   character render target is read back each frame for the HUD portrait.
 
 There is no per-pixel "text" — everything is glyph quads drawn with custom shaders.
 
@@ -69,108 +105,114 @@ ascii-engine/
 ├── index.html              # Vite entry; mounts #app, loads /src/main.ts
 ├── package.json            # deps (three) + scripts; @types/three & @types/node are devDeps
 ├── tsconfig.json           # strict flags — see "TypeScript gotchas" below
+├── vite.config.ts
 ├── public/                 # favicon.svg, icons.svg (static assets)
 └── src/
-    ├── main.ts             # App entry: builds the Riverside Village scene + layers
-    ├── style.css           # page chrome + the HUD styles
-    ├── counter.ts          # UNUSED — leftover Vite template demo (safe to delete)
-    ├── assets/             # UNUSED — Vite template images (safe to delete)
+    ├── main.ts             # App entry: Engine + LevelManager + WeatherLayer
+    ├── style.css           # page chrome, HUD + inventory modal styles
     │
-    ├── core/               # Engine, input, collision, stats, shared world layout
-    │   ├── Engine.ts       # Game loop, camera (follow + zoom), player movement,
-    │   │                   #   collision resolution, wading, aim, layer orchestration
-    │   ├── InputManager.ts # Keyboard/mouse/wheel state; one-shot attack + wheel-delta APIs
-    │   ├── CollisionSystem.ts # Circle-collider resolve (push player out of overlaps)
-    │   ├── PlayerStats.ts  # Health + stamina (sprint drains stamina, river drains health)
-    │   ├── world.ts        # ★ River SDF + boulders (CPU side), world bounds, player radius
+    ├── core/               # Simulation: engine, input, combat, stats, terrain, levels
+    │   ├── Engine.ts       # Game loop, camera, player movement, sword/dash/abilities,
+    │   │                   #   dialogue + inventory routing, quest hooks
+    │   ├── InputManager.ts # Keyboard/mouse/wheel state + one-shot "consume" APIs
+    │   ├── CollisionSystem.ts  # Circle-collider resolve (push out of overlaps)
+    │   ├── PlayerStats.ts  # Health/stamina, dash, damage mitigation + equipment bonuses
+    │   ├── EnemyManager.ts # Live enemies + projectiles: AI, sword hits, player damage
+    │   ├── InventorySystem.ts # Equipped weapon/armor + bag; getCombatStats()
+    │   ├── ProgressionSystem.ts # Corruption/Virtue alignment + "The Tainted Catch" quest
+    │   ├── LevelManager.ts # Builds terrain/layers/entities from serialized LevelData
+    │   ├── TerrainGrid.ts  # CPU+GPU source of truth for river/blight/footpath terrain
+    │   ├── world.ts        # World bounds, player radius, boulders, yToZ depth mapping
     │   └── types.ts        # Shared types (IRenderLayer, FrameContext, InputState, ...)
+    │
+    ├── data/               # Static data + asset registry
+    │   ├── AssetRegistry.ts # Enemy archetypes + unified 3D model factories/radius/colliders
+    │   ├── items.ts         # Weapon/armor item definitions (InventorySystem reads these)
+    │   ├── levelTypes.ts    # Serialization types (LevelData, PlacedEntity, EntityKind)
+    │   └── dialogue.json    # NPC dialogue buckets (quest/alignment-driven)
     │
     ├── rendering/          # All visual layers + shaders
     │   ├── GlyphAtlas.ts   # Character atlas texture + getIndex()
-    │   ├── GroundLayer.ts  # Forest-floor grid: dirt footpath, fallen leaves, moss variation
-    │   ├── GrassLayer.ts   # Swaying grass blades (wind + player push); clears the footpath
-    │   ├── WaterLayer.ts   # ★ River shader: flow, boulders+wakes, Blight, reflections
-    │   ├── ForestLayer.ts  # ★ Procedural trees (pine/oak/wilted) + wind sway + shadows
-    │   ├── BuildingLayer.ts# ★ Building sprites with emissive windows + light spill
-    │   ├── WeatherLayer.ts # Rain, fireflies/spores, drifting petals (instanced particles)
-    │   ├── AtmosphereLayer.ts # Screen-space-ish vignette + distance fog overlay
-    │   ├── AsciiCharPass.ts # ★ Offscreen 3D character → ASCII billboard + portrait read-back
-    │   └── Weapon.ts       # Top-down sword sprite that aims at the mouse and swings
+    │   ├── GroundLayer.ts  # Forest-floor grid (dirt path, leaves, moss)
+    │   ├── GrassLayer.ts   # Swaying grass blades
+    │   ├── WaterLayer.ts   # River shader: flow, boulders+wakes, blight, reflections
+    │   ├── ForestLayer.ts  # Procedural trees + wind sway + trunk colliders
+    │   ├── BuildingLayer.ts # Legacy ASCII building sprites with emissive windows
+    │   ├── WeatherLayer.ts # Rain, fireflies/spores, drifting petals
+    │   ├── AtmosphereLayer.ts # Vignette + distance fog overlay
+    │   ├── AsciiCharPass.ts # Offscreen 3D traveler → ASCII billboard + HUD portrait
+    │   ├── AsciiModelBaker.ts # Shared offscreen bake rig (3D models → ASCII sprites)
+    │   ├── AsciiBillboardMaterial.ts # ASCII billboard shader (luminance → glyph ramp)
+    │   ├── ModelBillboardLayer.ts # Placed 3D-baked entities (buildings/NPCs/shrines/nodes)
+    │   ├── EnemyLayer.ts   # Baked enemy billboards + projectile glyph cluster + health bars
+    │   ├── Weapon.ts       # Top-down sword sprite (aims at mouse, swings)
+    │   ├── Characters.ts   # 3D character model factories (player + NPCs)
+    │   ├── Enemies.ts      # 3D enemy model factories (stalker / spitter / sentinel)
+    │   ├── Weapons.ts      # 3D weapon model factories (iron sword / lantern blade)
+    │   ├── Buildings.ts    # 3D building model factories
+    │   ├── Nature.ts       # 3D nature-prop model factories (trees/boulders/clutter)
+    │   └── Progression.ts  # 3D progression model factories (poison node / light shrine)
     │
     ├── ui/
-    │   └── Hud.ts          # DOM HUD: live portrait + health/stamina bars
+    │   ├── Hud.ts          # Sidebar: portrait, vitals, abilities, [I] button, toasts
+    │   ├── DialogueBox.ts  # Bottom-center dialogue overlay
+    │   └── InventoryModal.ts # Gear & Bag + Quests overlay (toggled with I / Tab)
+    │
+    ├── editor/             # Dev-only level editor (tree-shaken out of prod by Vite)
+    │   ├── EditorController.ts
+    │   ├── EditorPanel.ts
+    │   └── editorTypes.ts
     │
     └── tools/
-        └── pngToAscii.ts   # CLI: convert a PNG → ASCII-prop JSON (uses sharp)
+        └── pngToAscii.ts   # CLI: PNG → ASCII-prop JSON (uses sharp)
 ```
-
-The `★` entries are the ones you'll touch most often when adding content.
 
 ---
 
 ## Key concepts & gotchas (for future sessions)
 
 ### Coordinate system & layering
-- Top-down **orthographic** camera. `Engine.viewHeight = 20` world units tall
-  (scroll-zoom clamps it to `[9, 30]`).
-- The ground grid is `100×100` cells at `0.6` units → a ±30-unit square; the playable
-  clearing is clamped to a ~19-unit radius (`WORLD_BOUNDS` in `world.ts`).
-- **Z-order** (camera looks down −Z from z=10, higher z = drawn on top):
+- Top-down **orthographic** camera. `Engine.viewHeight = 28` world units tall (scroll-zoom
+  clamps it to `[22, 38]`).
+- The ground is a ±30-unit square; the playable clearing is clamped to a ~19-unit radius
+  (`WORLD_BOUNDS` in `world.ts`). The player's collision radius is `PLAYER_RADIUS = 0.42`.
+- **Z-order is Y-sorted**, not a fixed table. `yToZ(worldY)` (in `world.ts`) maps a world Y
+  into the foreground band `[Y_TO_Z_MIN, Y_TO_Z_MAX] = [0.85, 1.95]` — smaller Y (further
+  south, toward the bottom of the screen) gets a *higher* z and is drawn in front, so walking
+  north of a tree hides the player behind it and walking south brings them in front. The
+  character, sword, enemies, NPCs, trees and buildings all live in this band. Background
+  layers (ground, grass, water, grounding shadows) sit below it; weather and atmosphere
+  render above it.
 
-  | z          | layer                          |
-  |------------|--------------------------------|
-  | 0          | ground                         |
-  | 0.2–0.5    | grass                          |
-  | 0.51       | tree shadows                   |
-  | 0.52       | building light-spill pools     |
-  | 0.55       | water                          |
-  | 0.92–1.12  | forest trees (sorted by Y)     |
-  | 1.0        | buildings                      |
-  | 1.2        | character                      |
-  | 1.3        | weapon                         |
-  | 2.5        | weather                        |
-  | 5          | atmosphere (renderOrder 1000, depthTest off) |
+### Terrain is a single source of truth
+The river, blight and footpath/clearing fields live in **`TerrainGrid`** (the single CPU + GPU
+source of truth). `LevelManager` serializes it as base64 in `LevelData` and rebuilds the
+ground/grass/water layers and colliders from it, so reshaping terrain no longer requires
+hand-syncing multiple copies.
 
-  All materials are `transparent: true, depthWrite: false`, so three.js sorts them by z.
+### Entities & colliders
+`LevelManager.buildBillboardPlacements()` turns every non-enemy `PlacedEntity` into a
+`ModelBillboardPlacement` (baked 3D billboard + colliders from `AssetRegistry`), and
+`rebuildColliders()` wires tree/building/billboard/boulder colliders into `CollisionSystem`.
+Enemies are owned separately by `EnemyManager` (spawned from placed `enemy` entities).
 
-### The river is defined in THREE places — keep them in sync
-The river channel (and its boulders) are duplicated, not shared:
-
-1. **`src/core/world.ts`** — the CPU-side copy (`riverSDF`, `BOULDERS`, `isInRiver`), used
-   by `Engine` for wading detection, boulder collision and world bounds.
-2. **`WaterLayer`'s GLSL** — a hardcoded `riverSDF` + `rock1/rock2/rock3` for rendering.
-3. **`ForestLayer.riverDistance()`** — a hardcoded mirror so trees don't spawn in the river.
-
-If you reshape the river, change **all three** together. (`world.ts` still describes itself
-as the single source of truth; that's aspirational — the shader no longer interpolates from
-it after the village refactor.)
-
-### Content layers (how to add stuff)
-- **Trees** — `ForestLayer` builds one `InstancedMesh` from three procedural `TreeAsset`s
-  (`createAncientPine`, `createGnarledOak`, `createWiltedTree`). Each cell carries a
-  `swayWeight` (0 for trunk/roots, 0.15–1.0 for canopy) so the vertex shader only bends the
-  crown. Placements come from `generateRiversideForest(seed)` — deterministic, ~220 trees,
-  keeps the river + village clearing + northern trail clear. `getColliders()` exposes a
-  trunk collider per tree.
-- **Buildings** — `BuildingLayer` renders `BuildingAsset`s whose cells carry an `emissive`
-  flag (glowing windows / lanterns) and a `lights` list that spawns additive light-spill
-  pools onto the grass. See `createRiversideCottage()` for the layout-string convention.
-- **Water lights** — `WaterLayer.setLights(WaterLight[])` feeds up to 8 world lights into
-  the shader for extra reflections (e.g. cottage windows mirroring in the river).
-
-### Collision is only partially wired
-`Engine` owns a `CollisionSystem` and registers the **river boulders** (from `world.ts`).
-`ForestLayer.getColliders()` and `BuildingLayer.getColliders()` exist, but **`main.ts` does
-not currently call `engine.collision.addMany(...)`** for them — so trees and buildings don't
-block movement yet. Wire them up when you want solid trunks/walls.
+### Combat & enemies
+`EnemyManager` owns every live enemy and projectile and reads the player position from the
+engine. Enemy archetypes (`blight_stalker` melee, `spore_spitter` ranged, `blight_sentinel`
+mini-boss) are defined in `AssetRegistry`; their 3D models come from `Enemies.ts` and bake
+into billboards via `EnemyLayer`. Sword damage, reach and arc come from the equipped weapon
+(`InventorySystem.getCombatStats()`), and the `EnemyLayer` scales the Blight Stalker up and
+renders Spore Spitter projectiles as a multi-glyph toxic orb.
 
 ### The character is two separate things
-- **Body/aim** — `AsciiCharPass` is a 3D rig rendered offscreen. It faces the mouse via
-  `update(..., aimX, aimY, ...)`; its facing formula is `atan2(aimX, -aimY)` (note the
-  negation — it matches the old movement-facing convention).
-- **Sword** — `Weapon` is a flat top-down sprite (not part of the rig). Its rotation is
-  `atan2(aimX, aimY)` (no negation). Both point at the same cursor; they just use different
-  conventions because one is a 3/4 billboard and the other is a true top-down plane.
+- **Body/aim** — `AsciiCharPass` renders a 3D traveler model (`player_traveler` from
+  `Characters.ts`) offscreen into a `192×192` target, then a billboard shader quantizes it
+  into a `34×42` glyph grid. Its facing formula is `atan2(aimX, -aimY)`.
+- **Sword** — `Weapon` is a flat top-down sprite (not part of the rig). Its pivot is raised
+  `+0.75` world units to hand/torso height, with an `orbitRadius` of ~0.5 so the hilt reads
+  as held. Its rotation is `atan2(aimX, aimY)` (no negation). Both point at the same cursor;
+  they use different conventions because one is a 3/4 billboard and the other a true
+  top-down plane.
 
 ### HUD portrait read-back
 `AsciiCharPass.render()` calls `readRenderTargetPixels` into a reusable buffer.
@@ -187,7 +229,3 @@ render).
 ### The `pngToAscii` tool
 `npx tsx src/tools/pngToAscii.ts <input.png> <out.json> [targetWidth]` converts an image to
 an ASCII-prop JSON. It needs `sharp` (already a devDependency).
-
-### Dead weight you can delete
-- `src/counter.ts` and `src/assets/*` — unused Vite-template leftovers.
-- The empty `mkdir` file at the repo root — stray.

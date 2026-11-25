@@ -38,7 +38,6 @@ export interface EnemyProjectile {
   radius: number;
 }
 
-const SWORD_DAMAGE = 20;
 const PLAYER_KNOCKBACK = 3.2;
 const ENEMY_KNOCKBACK = 5.0;
 const HIT_FLASH_DURATION = 0.12;
@@ -59,6 +58,9 @@ export class EnemyManager {
   private projectiles: EnemyProjectile[] = [];
   private spawns: Array<{ assetId: string; x: number; y: number }> = [];
   private idCounter = 0;
+
+  /** Live sword damage, wired from the player's equipped weapon each frame. */
+  public swordDamage = 20;
 
   constructor(engine: Engine) {
     this.engine = engine;
@@ -359,7 +361,7 @@ export class EnemyManager {
       if (Math.abs(diff) > weapon.arcHalfAngle) continue;
 
       enemy.lastHitSwingId = weapon.swingId;
-      enemy.hp -= SWORD_DAMAGE;
+      enemy.hp -= this.swordDamage;
       enemy.hitFlashTimer = HIT_FLASH_DURATION;
 
       const kd = dist || 1;

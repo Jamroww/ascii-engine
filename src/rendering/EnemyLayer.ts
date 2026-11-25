@@ -85,6 +85,19 @@ const MAX_PROJECTILES = 256;
 const HIT_FLASH_DURATION = 0.12;
 const BILLBOARD_RESOLUTION = 128;
 
+/**
+ * Multi-cell glyph cluster drawn for each Spore Spitter projectile: a bright
+ * centre orb surrounded by smaller neon motes, giving a large readable toxic
+ * orb while the actual hitbox stays fair.
+ */
+const PROJECTILE_CLUSTER = [
+  { dx: 0, dy: 0, scale: 1.0, glyph: '@' },
+  { dx: -0.44, dy: 0, scale: 0.6, glyph: '%' },
+  { dx: 0.44, dy: 0, scale: 0.6, glyph: '%' },
+  { dx: 0, dy: 0.44, scale: 0.6, glyph: '*' },
+  { dx: 0, dy: -0.44, scale: 0.6, glyph: '*' },
+] as const;
+
 interface InstancedBuffers {
   mesh: THREE.InstancedMesh;
   glyphs: Float32Array;
@@ -116,7 +129,6 @@ export class EnemyLayer implements IRenderLayer {
 
   private readonly healthBuffers: InstancedBuffers;
   private readonly projectileBuffers: InstancedBuffers;
-  private readonly projectileGlyphs: number[];
 
   private readonly shadowMaterial: THREE.ShaderMaterial;
   private readonly shadowMesh: THREE.InstancedMesh;
@@ -131,8 +143,11 @@ export class EnemyLayer implements IRenderLayer {
       THREE.NormalBlending,
       true
     );
-    this.projectileBuffers = this.createBuffers(MAX_PROJECTILES, THREE.AdditiveBlending, false);
-    this.projectileGlyphs = [atlas.getIndex('*'), atlas.getIndex('%'), atlas.getIndex('@')];
+    this.projectileBuffers = this.createBuffers(
+      MAX_PROJECTILES * PROJECTILE_CLUSTER.length,
+      THREE.AdditiveBlending,
+      false
+    );
 
     this.shadowMaterial = new THREE.ShaderMaterial({
       vertexShader: SHADOW_VERTEX_SHADER,
@@ -224,6 +239,9 @@ export class EnemyLayer implements IRenderLayer {
         this.enemyTypes[e] = enemy.assetId;
         material.uniforms.uBakedTex.value = sprite.texture;
         material.uniforms.uGlyphGrid.value = glyphGridFor(sprite.worldWidth, sprite.worldHeight);
+        // Give the Blight Stalker a bright toxic/pale-bone rim floor so its
+        // enlarged silhouette stays unmistakable during fast chases.
+        material.uniforms.uMinLuminance.value = enemy.assetId === 'blight_stalker' ? 0.28 : 0;
       }
 
       const flash =
@@ -238,7 +256,8 @@ export class EnemyLayer implements IRenderLayer {
           ? Math.sin(ctx.elapsed * 4 + enemy.x * 1.3 + enemy.y * 0.7) * 0.06
           : 0;
 
-      const scale = telegraph ? 1.0 + telegraphPulse * 0.2 : 1.0;
+      const baseScale = enemy.assetId === 'blight_stalker' ? 1.7 : 1.0;
+      const scale = baseScale * (telegraph ? 1.0 + telegraphPulse * 0.2 : 1.0);
       const w = sprite.worldWidth * scale;
       const h = sprite.worldHeight * scale;
       const baseY = enemy.y + bob - 0.02;
@@ -318,25 +337,36 @@ export class EnemyLayer implements IRenderLayer {
     const { mesh, glyphs, colors, glyphAttr, colorAttr } = this.projectileBuffers;
     const projectiles = this.manager.getProjectiles();
 
+    const cellCount = PROJECTILE_CLUSTER.length;
     let i = 0;
-    for (let p = 0; p < projectiles.length && i < glyphs.length; p++) {
+    for (let p = 0; p < projectiles.length && i + cellCount <= glyphs.length; p++) {
       const proj = projectiles[p];
-      const size = 0.4 + Math.sin(ctx.elapsed * 20 + p * 1.3) * 0.08;
+      // ~1.9x the old single-glyph projectile, now a pulsing multi-cell orb.
+      const baseSize = 0.72 + Math.sin(ctx.elapsed * 20 + p * 1.3) * 0.14;
+      const ez = yToZ(proj.y) + 0.05;
 
-      this.dummy.position.set(proj.x, proj.y, yToZ(proj.y) + 0.05);
-      this.dummy.scale.set(size, size, 1);
-      this.dummy.updateMatrix();
-      mesh.setMatrixAt(i, this.dummy.matrix);
+      for (let c = 0; c < cellCount; c++) {
+        const cell = PROJECTILE_CLUSTER[c];
+        this.dummy.position.set(
+          proj.x + cell.dx * baseSize,
+          proj.y + cell.dy * baseSize,
+          ez
+        );
+        const cellSize = baseSize * cell.scale;
+        this.dummy.scale.set(cellSize, cellSize, 1);
+        this.dummy.updateMatrix();
+        mesh.setMatrixAt(i, this.dummy.matrix);
 
-      glyphs[i] = this.projectileGlyphs[p % this.projectileGlyphs.length];
+        glyphs[i] = this.atlas.getIndex(cell.glyph);
 
-      // Alternate toxic green / violet with a slow pulse.
-      const violet = p % 2 === 0;
-      const pulse = 0.75 + 0.25 * Math.sin(ctx.elapsed * 18 + p * 1.7);
-      colors[i * 3 + 0] = (violet ? 0.7 : 0.4) * pulse;
-      colors[i * 3 + 1] = (violet ? 0.4 : 0.95) * pulse;
-      colors[i * 3 + 2] = (violet ? 0.95 : 0.45) * pulse;
-      i++;
+        // Alternate toxic green / violet with a slow pulse across the cluster.
+        const violet = (p + c) % 2 === 0;
+        const pulse = 0.75 + 0.25 * Math.sin(ctx.elapsed * 18 + p * 1.7 + c * 0.6);
+        colors[i * 3 + 0] = (violet ? 0.7 : 0.35) * pulse;
+        colors[i * 3 + 1] = (violet ? 0.4 : 0.95) * pulse;
+        colors[i * 3 + 2] = (violet ? 0.95 : 0.5) * pulse;
+        i++;
+      }
     }
 
     mesh.count = i;

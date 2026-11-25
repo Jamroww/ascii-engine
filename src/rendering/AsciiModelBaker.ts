@@ -65,6 +65,7 @@ export class AsciiModelBaker {
   private readonly camera: THREE.OrthographicCamera;
   private readonly cache = new Map<string, BakedAsciiSprite>();
   private readonly npcRim: THREE.DirectionalLight;
+  private readonly npcFill: THREE.DirectionalLight;
 
   constructor() {
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 60);
@@ -85,6 +86,12 @@ export class AsciiModelBaker {
     // crushing to black.
     this.npcRim = new THREE.DirectionalLight(0xdfe6ee, 1.7);
     this.npcRim.position.set(-2.6, 3.2, -2.2);
+
+    // Strong front-facing fill light (also NPC-only) so the whole front
+    // silhouette — dark coats, hats, oars and staffs — keeps readable shading
+    // instead of dropping to pure black away from the key light.
+    this.npcFill = new THREE.DirectionalLight(0xf4f8ff, 1.8);
+    this.npcFill.position.set(1.8, 2.6, 3.4);
 
     // Hemisphere for a soft sky/ground gradient across the flat-shaded facets.
     const hemi = new THREE.HemisphereLight(0x9fb8d0, 0x151a20, 0.85);
@@ -195,7 +202,10 @@ export class AsciiModelBaker {
     target.texture.generateMipmaps = false;
 
     this.scene.add(model);
-    if (options?.npcRim) this.scene.add(this.npcRim);
+    if (options?.npcRim) {
+      this.scene.add(this.npcRim);
+      this.scene.add(this.npcFill);
+    }
 
     const prevTarget = renderer.getRenderTarget();
     const prevColor = new THREE.Color();
@@ -210,7 +220,10 @@ export class AsciiModelBaker {
     renderer.setRenderTarget(prevTarget);
     renderer.setClearColor(prevColor, prevAlpha);
 
-    if (options?.npcRim) this.scene.remove(this.npcRim);
+    if (options?.npcRim) {
+      this.scene.remove(this.npcRim);
+      this.scene.remove(this.npcFill);
+    }
     this.scene.remove(model);
 
     return { texture: target.texture, worldWidth, worldHeight, aspect };

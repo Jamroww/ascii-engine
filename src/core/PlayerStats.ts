@@ -14,9 +14,11 @@ const MOVE_SPEED_THRESHOLD = 30;
 
 export class PlayerStats {
   health = 100;
-  readonly maxHealth = 100;
   stamina = 200;
-  readonly maxStamina = 200;
+
+  private bonusMaxHp = 0;
+  private bonusMaxStamina = 0;
+  private damageReduction = 0;
 
   /** Live corruption read each frame by the engine (drives Blight Dash + move speed). */
   corruption = 0;
@@ -25,6 +27,24 @@ export class PlayerStats {
   private dashTimer = 0;
   private dashCooldown = 0;
   private dashActive = false;
+
+  get maxHealth(): number {
+    return 100 + this.bonusMaxHp;
+  }
+
+  get maxStamina(): number {
+    return 200 + this.bonusMaxStamina;
+  }
+
+  /** Apply equipment-derived bonuses (called once per gameplay frame). */
+  applyEquipment(bonusMaxHp: number, bonusMaxStamina: number, damageReduction: number): void {
+    this.bonusMaxHp = bonusMaxHp;
+    this.bonusMaxStamina = bonusMaxStamina;
+    this.damageReduction = damageReduction;
+    // Clamp current pools if a swap lowered the caps.
+    this.health = Math.min(this.health, this.maxHealth);
+    this.stamina = Math.min(this.stamina, this.maxStamina);
+  }
 
   get isDead(): boolean {
     return this.health <= 0;
@@ -70,7 +90,8 @@ export class PlayerStats {
    */
   takeDamage(amount: number): boolean {
     if (amount <= 0 || this.isInvulnerable()) return false;
-    this.health = Math.max(0, this.health - amount);
+    const mitigated = amount * (1 - this.damageReduction);
+    this.health = Math.max(0, this.health - mitigated);
     this.invulnTimer = INVULN_DURATION;
     return true;
   }

@@ -13,6 +13,8 @@ import { Weapon } from '../rendering/Weapon';
 import { EnemyLayer } from '../rendering/EnemyLayer';
 import { Hud } from '../ui/Hud';
 import { DialogueBox } from '../ui/DialogueBox';
+import { InventoryModal } from '../ui/InventoryModal';
+import { InventorySystem } from './InventorySystem';
 import { WORLD_BOUNDS, PLAYER_RADIUS } from './world';
 import type { TerrainGrid } from './TerrainGrid';
 import type { LevelManager } from './LevelManager';
@@ -50,9 +52,11 @@ export class Engine {
   private readonly atmosphere: AtmosphereLayer;
   private readonly hud: Hud;
   private readonly dialogueBox: DialogueBox;
+  private readonly inventoryModal: InventoryModal;
   public readonly stats = new PlayerStats();
   public readonly enemies: EnemyManager;
   public readonly progression = new ProgressionSystem();
+  public readonly inventory = new InventorySystem();
   private readonly layers: IRenderLayer[] = [];
 
   private viewHeight = 28;
@@ -76,6 +80,7 @@ export class Engine {
   private dashDirY = 0;
   private radiantCooldown = 0;
   private dialogueOpen = false;
+  private inventoryOpen = false;
   private currentInteract: PlacedEntity | null = null;
 
   constructor(container: HTMLElement) {
@@ -117,6 +122,10 @@ export class Engine {
 
     this.hud = new Hud(container);
     this.dialogueBox = new DialogueBox(container);
+    this.inventoryModal = new InventoryModal(container, this.inventory, this.progression);
+
+    // The sidebar [I] button toggles the gear & quest screen.
+    this.hud.setInventoryHandler(() => this.toggleInventory());
 
     // Shrine purification heals the player through this handler.
     this.progression.setHealHandler((amount) => this.stats.heal(amount));
@@ -184,6 +193,10 @@ export class Engine {
     if (this.dialogueBox.isOpen) {
       this.dialogueBox.close();
       this.dialogueOpen = false;
+    }
+    if (this.inventoryModal.isOpen) {
+      this.inventoryModal.close();
+      this.inventoryOpen = false;
     }
   }
 
@@ -255,9 +268,9 @@ export class Engine {
   private update(dt: number, elapsed: number): void {
     const state = this.input.getState();
 
-    // Camera zoom (scroll in / out), paused while dialogue is open.
+    // Camera zoom (scroll in / out), paused while a modal is open.
     const wheel = this.input.takeWheelDelta();
-    if (wheel !== 0 && !this.dialogueOpen) {
+    if (wheel !== 0 && !this.dialogueOpen && !this.inventoryOpen) {
       this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 22, 38);
       this.applyViewport();
     }
@@ -266,8 +279,15 @@ export class Engine {
     this.hitstopTimer = Math.max(0, this.hitstopTimer - dt);
     this.shakeTimer = Math.max(0, this.shakeTimer - dt);
 
+    // I / Tab toggles the inventory & quest screen.
+    if (this.input.consumeInventory()) {
+      this.toggleInventory();
+    }
+
     if (this.dialogueOpen) {
       this.updateDialogue();
+    } else if (this.inventoryOpen) {
+      this.updateInventory();
     } else {
       this.input.consumeCancel();
       if (this.editorMode) {
@@ -324,6 +344,33 @@ export class Engine {
     this.input.consumeCancel();
   }
 
+  /** Open/close the gear & quest screen (pauses the world like dialogue). */
+  private toggleInventory(): void {
+    if (this.dialogueOpen) return;
+    this.inventoryOpen = !this.inventoryOpen;
+    if (this.inventoryOpen) {
+      this.inventoryModal.open();
+    } else {
+      this.inventoryModal.close();
+    }
+    this.drainGameplayInput();
+  }
+
+  /** Pause the world while the inventory is open; Esc closes it. */
+  private updateInventory(): void {
+    if (this.input.consumeCancel()) {
+      this.inventoryOpen = false;
+      this.inventoryModal.close();
+      this.drainGameplayInput();
+      return;
+    }
+    // Drain stray gameplay input so a queued swing / dash never fires on close.
+    this.input.takeAttack();
+    this.input.consumeDash();
+    this.input.consumeInteract();
+    this.input.consumeLightAbility();
+  }
+
   private updateGameplay(dt: number, state: InputState): void {
     // Death pause: freeze the world, then respawn at the level's spawn point.
     if (this.respawnPending) {
@@ -336,6 +383,13 @@ export class Engine {
 
     // Feed corruption to the stats for Blight Dash + move-speed bonuses.
     this.stats.corruption = this.progression.corruption;
+
+    // Wire equipped gear into stats, the sword and enemy combat each frame.
+    const combat = this.inventory.getCombatStats();
+    this.stats.applyEquipment(combat.bonusMaxHp, combat.bonusMaxStamina, combat.damageReduction);
+    this.weapon.setCombat(combat.reach, combat.arcHalfAngle);
+    this.weapon.setTint(combat.weaponTint.r, combat.weaponTint.g, combat.weaponTint.b);
+    this.enemies.swordDamage = combat.swordDamage;
 
     // Sword swings: left click only.
     if (this.input.takeAttack()) {
@@ -381,7 +435,10 @@ export class Engine {
       this.playerPos.y += this.dashDirY * this.stats.dashSpeed * dt;
     } else {
       const speed =
-        (sprinting ? 10 : 5.5) * (1 + this.stats.moveSpeedBonus) * (effWading ? 0.45 : 1);
+        (sprinting ? 10 : 5.5) *
+        (1 + this.stats.moveSpeedBonus) *
+        combat.speedMultiplier *
+        (effWading ? 0.45 : 1);
       this.playerPos.x += (state.moveX * speed + this.knockbackX) * dt;
       this.playerPos.y += (state.moveY * speed + this.knockbackY) * dt;
     }
@@ -440,6 +497,7 @@ export class Engine {
     if (this.progression.questStage === 'active' && this.enemies.getEnemies().length === 0) {
       this.progression.questStage = 'upstream_cleared';
       this.hud.showToast('The upstream Blight subsides — return to the Ferryman.');
+      this.hud.flashInventoryButton();
     }
 
     this.updateInteractPrompt();
@@ -461,7 +519,6 @@ export class Engine {
         this.stats.stamina >= RADIANT_STAMINA,
       radiantCooldownFraction: this.radiantCooldown > 0 ? this.radiantCooldown / RADIANT_COOLDOWN : 0,
       radiantCooldownSeconds: this.radiantCooldown,
-      objective: this.objectiveText(),
     });
     this.hud.drawPortrait(this.character.getPortraitPixels());
   }
@@ -604,23 +661,12 @@ export class Engine {
       if (this.progression.questStage === 'not_started') {
         this.progression.questStage = 'active';
         this.hud.showToast('The Tainted Catch — clear the upstream Blight.');
+        this.hud.flashInventoryButton();
       } else if (this.progression.questStage === 'upstream_cleared') {
         this.progression.questStage = 'completed';
         this.hud.showToast('The Tainted Catch complete — the river runs clean.');
+        this.hud.flashInventoryButton();
       }
-    }
-  }
-
-  private objectiveText(): string {
-    switch (this.progression.questStage) {
-      case 'not_started':
-        return 'Speak with the Ferryman by the dock.';
-      case 'active':
-        return 'The Tainted Catch — purge the upstream Blight.';
-      case 'upstream_cleared':
-        return 'The Blight is purged — return to the Ferryman.';
-      case 'completed':
-        return 'The Tainted Catch — complete.';
     }
   }
 
@@ -660,6 +706,7 @@ export class Engine {
     this.atmosphere.dispose();
     this.hud.dispose();
     this.dialogueBox.dispose();
+    this.inventoryModal.dispose();
     for (const layer of this.layers) {
       layer.dispose();
     }

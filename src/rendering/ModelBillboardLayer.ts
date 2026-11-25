@@ -329,9 +329,11 @@ export class ModelBillboardLayer implements IRenderLayer {
     const material = createBillboardMaterial(this.atlas);
     material.uniforms.uGlyphGrid.value = glyphGridFor(worldWidth, worldHeight);
     // Lift dark cloaks/coats and building walls so they stay legible outside
-    // the lantern centre instead of crushing to black.
+    // the lantern centre instead of crushing to black. NPCs also get a hard
+    // luminance floor so their silhouettes never drop below a mid-tone glyph.
     if (placement.kind === 'npc') {
       material.uniforms.uLumLift.value = 0.22;
+      material.uniforms.uMinLuminance.value = 0.34;
     } else if (placement.kind === 'building') {
       material.uniforms.uLumLift.value = 0.12;
     }

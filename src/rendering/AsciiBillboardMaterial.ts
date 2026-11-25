@@ -24,6 +24,7 @@ const BILLBOARD_FRAGMENT_SHADER = /* glsl */ `
   uniform vec2 uGlyphGrid;
   uniform float uFlash;
   uniform float uLumLift;
+  uniform float uMinLuminance;
   uniform vec3 uTint;
   uniform float uTintStrength;
   uniform float uAlpha;
@@ -42,8 +43,11 @@ const BILLBOARD_FRAGMENT_SHADER = /* glsl */ `
 
     // 3. Map luminance to the density ramp (GlyphAtlas indices 1..11: .,:;-=+*#%@).
     //    uLumLift raises the floor so dark cloaks/coats quantize into legible
-    //    silver-grey glyphs instead of crushing to black.
+    //    silver-grey glyphs instead of crushing to black; uMinLuminance clamps
+    //    the raw luminance floor outright so opaque pixels never fall below a
+    //    mid-tone glyph.
     float lum = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
+    lum = max(lum, uMinLuminance);
     lum = clamp((lum - 0.16 + uLumLift) * 1.7, 0.0, 1.0);
     float rampIndex = floor(lum * 10.0) + 1.0;
 
@@ -116,6 +120,7 @@ export function createBillboardMaterial(
       },
       uFlash: { value: 0 },
       uLumLift: { value: 0 },
+      uMinLuminance: { value: 0 },
       uTint: { value: new THREE.Color(1.0, 0.95, 0.55) },
       uTintStrength: { value: 0 },
       uAlpha: { value: 1 },

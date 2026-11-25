@@ -14,10 +14,9 @@ body,
 }
 
 /* ---------------------------------------------------------------------------
-   HUD — a full-viewport, non-interactive overlay. A fixed Doom-1993-style
-   vertical status bar hugs the left edge; toasts float top-centre and the
-   interact prompt sits just above the dialogue area, shifted right by half the
-   panel width so both stay visually centred in the remaining game area.
+   HUD — a full-viewport, non-interactive overlay. A tapering organic sidebar
+   (winding root + craggy stone frame) hugs the left edge; toasts float
+   top-centre and the interact prompt sits just above the dialogue area.
 
    Aesthetic: strict white / ash-grey / charcoal / black, dithered pixel stone,
    hard stepped bevels, zero blur, zero border-radius.
@@ -32,45 +31,75 @@ body,
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* --- Left status panel ----------------------------------------------------- */
+/* --- Left organic rock-and-root panel -------------------------------------- */
 
 .hud-panel {
   position: fixed;
   left: 0;
   top: 0;
-  bottom: 0;
-  width: 168px;
+  width: 184px;
   z-index: 500;
   box-sizing: border-box;
-  padding: 12px 10px 14px;
+  padding: 16px 24px 30px 14px;
+  display: flex;
+  flex-direction: column;
+  color: #e8e8e8;
+  image-rendering: pixelated;
+}
+
+.hud-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+  shape-rendering: crispEdges;
+}
+
+.hud-frame__slate {
+  fill: #121417;
+  stroke: #0c0d0f;
+  stroke-width: 2;
+}
+
+.hud-frame__slate-lite {
+  fill: #202329;
+}
+
+.hud-frame__root {
+  fill: none;
+  stroke: #2b241c;
+  stroke-width: 8;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+
+.hud-frame__root-hi {
+  fill: none;
+  stroke: #4a4034;
+  stroke-width: 2;
+  stroke-linecap: square;
+}
+
+.hud-frame__twig {
+  fill: none;
+  stroke: #3a3128;
+  stroke-width: 2;
+  stroke-linecap: square;
+}
+
+.hud-frame__leaf {
+  stroke: #1e2a18;
+  stroke-width: 1;
+}
+
+.hud-panel__inner {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  overflow-y: auto;
-  scrollbar-width: none;
-
-  color: #e8e8e8;
-  border-radius: 0;
-  image-rendering: pixelated;
-
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='80' height='80' filter='url(%23n)' opacity='0.14'/%3E%3C/svg%3E"),
-    repeating-conic-gradient(#1b1b1e 0% 25%, #232326 0% 50%) 0 0 / 4px 4px;
-
-  border: 3px solid;
-  border-top-color: #7a7a7a;
-  border-left-color: #7a7a7a;
-  border-bottom-color: #0e0e0e;
-  border-right-color: #0e0e0e;
-
-  box-shadow:
-    4px 4px 0 #000,
-    inset 2px 2px 0 #0e0e0e,
-    inset -2px -2px 0 #5a5a5a;
-}
-
-.hud-panel::-webkit-scrollbar {
-  display: none;
 }
 
 .hud-panel__title {
@@ -119,7 +148,7 @@ body,
 
 .hud-portrait-frame {
   position: relative;
-  width: 132px;
+  width: 122px;
   aspect-ratio: 1 / 1;
   margin: 10px auto 12px;
   padding: 4px;
@@ -166,12 +195,33 @@ body,
 
 .hud-stat__row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
+  gap: 7px;
   padding: 0 8px 3px;
 }
 
+.hud-stat__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border: 1px solid #0e0e0e;
+  background: rgba(0, 0, 0, 0.6);
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.08);
+}
+.hud-stat__badge--heart { color: #ffffff; }
+.hud-stat__badge--boot { color: #c8c8c8; }
+
+.hud-stat__icon {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
 .hud-stat__label {
+  flex: 1;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 2px;
@@ -246,26 +296,7 @@ body,
   background: linear-gradient(180deg, #e4e4e4 0 45%, #b8b8b8 45% 100%);
 }
 
-/* Creeping thorny vines draped across the vitals frames. */
-.hud-vines {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  opacity: 0.7;
-  shape-rendering: crispEdges;
-}
-.hud-vine--main {
-  stroke: #b0b0b0;
-  stroke-width: 2;
-}
-.hud-vine--twig {
-  stroke: #8a8a8a;
-  stroke-width: 1.5;
-}
-
-/* --- Abilities well -------------------------------------------------------- */
+/* --- Abilities + menu well -------------------------------------------------- */
 
 .hud-well--abilities {
   display: flex;
@@ -349,20 +380,31 @@ body,
   opacity: 0.4;
 }
 
-/* --- Objective well -------------------------------------------------------- */
-
-.hud-well--objective {
-  margin-top: auto;
+/* Clickable [I] Gear/Quests slot. */
+.hud-inventory-button {
+  display: block;
+  pointer-events: auto;
+  cursor: pointer;
+  font: inherit;
+  text-align: inherit;
+  color: inherit;
+  letter-spacing: inherit;
 }
 
-.hud-objective-text {
-  padding: 9px 9px;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.45;
-  letter-spacing: 0.4px;
-  color: #e8e8e8;
-  text-shadow: 1px 1px 0 #000;
+.hud-inventory-button .hud-ability__state--inventory {
+  color: #bcd9b4;
+}
+
+.hud-inventory-button.is-flashing {
+  animation: hud-inventory-flash 0.8s steps(2, end) infinite;
+  border-bottom-color: #9adf8a;
+  border-right-color: #9adf8a;
+}
+
+@keyframes hud-inventory-flash {
+  0% { box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.75); }
+  50% { box-shadow: inset 2px 2px 0 rgba(154, 223, 138, 0.55), 0 0 7px rgba(154, 223, 138, 0.4); }
+  100% { box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.75); }
 }
 
 /* --- Toast + interact prompt ----------------------------------------------- */
@@ -370,7 +412,7 @@ body,
 .hud-toast {
   position: absolute;
   top: 64px;
-  left: calc(50% + 84px);
+  left: calc(50% + 92px);
   transform: translateX(-50%);
   padding: 8px 16px;
   font-size: 13px;
@@ -396,7 +438,7 @@ body,
 .hud-interact {
   position: absolute;
   bottom: 152px;
-  left: calc(50% + 84px);
+  left: calc(50% + 92px);
   transform: translateX(-50%);
   padding: 7px 14px;
   font-size: 12px;
@@ -423,9 +465,9 @@ body,
 .dialogue-box {
   position: absolute;
   bottom: 26px;
-  left: calc(50% + 84px);
+  left: calc(50% + 92px);
   transform: translateX(-50%);
-  width: min(560px, calc(100vw - 216px));
+  width: min(560px, calc(100vw - 232px));
   padding: 14px 18px;
   pointer-events: none;
   user-select: none;
@@ -467,4 +509,280 @@ body,
   letter-spacing: 1px;
   color: #9a9a9a;
   text-shadow: 1px 1px 0 #000;
+}
+
+/* ---------------------------------------------------------------------------
+   Inventory & Quest modal — dark stone/root-framed overlay, toggled with I/Tab.
+--------------------------------------------------------------------------- */
+.inventory-modal {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 700;
+  pointer-events: auto;
+  user-select: none;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
+  background: rgba(3, 4, 5, 0.62);
+}
+.inventory-modal[hidden] {
+  display: none;
+}
+
+.inventory-modal__frame {
+  width: min(620px, calc(100vw - 24px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  scrollbar-width: none;
+  color: #e8e8e8;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='80' height='80' filter='url(%23n)' opacity='0.12'/%3E%3C/svg%3E"),
+    repeating-conic-gradient(#101114 0% 25%, #17181c 0% 50%) 0 0 / 4px 4px;
+  border: 3px solid;
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+  border-bottom-color: #0e0e0e;
+  border-right-color: #0e0e0e;
+  box-shadow: 5px 5px 0 #000, inset 2px 2px 0 #0e0e0e, inset -2px -2px 0 #3a3a3d;
+  image-rendering: pixelated;
+}
+.inventory-modal__frame::-webkit-scrollbar {
+  display: none;
+}
+
+.inventory-modal__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 16px 10px;
+  border-bottom: 2px solid #0e0e0e;
+}
+
+.inventory-modal__title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #ffffff;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.inventory-modal__hint {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: #9a9a9a;
+}
+
+.inventory-modal__tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 16px 0;
+}
+
+.inventory-modal__tab {
+  font: inherit;
+  color: #cfcfcf;
+  background: rgba(20, 20, 24, 0.9);
+  border: 2px solid;
+  border-top-color: #5a5a5a;
+  border-left-color: #5a5a5a;
+  border-bottom-color: #0e0e0e;
+  border-right-color: #0e0e0e;
+  padding: 7px 14px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  font-weight: 700;
+}
+.inventory-modal__tab.is-active {
+  color: #ffffff;
+  background: rgba(40, 40, 46, 0.95);
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+}
+
+.inventory-modal__body {
+  padding: 16px;
+}
+
+.inventory-modal__stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.inventory-modal__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #5a5a5a;
+  border-right-color: #5a5a5a;
+  background: rgba(8, 8, 10, 0.9);
+}
+
+.inventory-modal__stat-k {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: #9a9a9a;
+}
+
+.inventory-modal__stat-v {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+
+.inventory-modal__slot {
+  margin-bottom: 12px;
+}
+
+.inventory-modal__slot-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #cfcfcf;
+  margin-bottom: 6px;
+}
+
+.inventory-modal__slot-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #5a5a5a;
+  border-right-color: #5a5a5a;
+  background: rgba(8, 8, 10, 0.9);
+}
+
+.inventory-modal__slot-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.inventory-modal__slot-desc {
+  font-size: 11px;
+  color: #9a9a9a;
+  text-align: right;
+}
+
+.inventory-modal__bag {
+  margin-top: 4px;
+}
+
+.inventory-modal__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  text-align: left;
+  color: #e8e8e8;
+  background: rgba(20, 20, 24, 0.85);
+  border: 2px solid;
+  border-top-color: #5a5a5a;
+  border-left-color: #5a5a5a;
+  border-bottom-color: #0e0e0e;
+  border-right-color: #0e0e0e;
+  cursor: pointer;
+}
+.inventory-modal__item:hover {
+  background: rgba(40, 40, 46, 0.95);
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+}
+
+.inventory-modal__item-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.inventory-modal__item-desc {
+  font-size: 11px;
+  color: #9a9a9a;
+  text-align: right;
+}
+
+.inventory-modal__empty {
+  padding: 12px;
+  color: #6a6a6a;
+  font-size: 12px;
+  border: 2px dashed #2a2a2d;
+}
+
+.inventory-modal__quest-name {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 6px;
+}
+
+.inventory-modal__quest-state {
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #e8d878;
+}
+
+.inventory-modal__quest-note {
+  font-size: 11px;
+  color: #9a9a9a;
+  margin-bottom: 14px;
+}
+
+.inventory-modal__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inventory-modal__step {
+  padding: 10px 12px;
+  border: 2px solid;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.inventory-modal__step::before {
+  content: '[ ] ';
+  color: #5a5a5a;
+}
+.inventory-modal__step.is-done {
+  color: #cfe8c8;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #4a6b3a;
+  border-right-color: #4a6b3a;
+  background: rgba(14, 26, 14, 0.8);
+}
+.inventory-modal__step.is-done::before {
+  content: '[x] ';
+  color: #9adf8a;
+}
+.inventory-modal__step.is-pending {
+  color: #9a9a9a;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #2a2a2d;
+  border-right-color: #2a2a2d;
+  background: rgba(10, 10, 12, 0.8);
 }
