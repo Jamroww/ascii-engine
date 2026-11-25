@@ -1,49 +1,60 @@
 import * as THREE from 'three';
-import { GlyphAtlas } from './GlyphAtlas';
-import type { TerrainGrid } from '../core/TerrainGrid';
 import type { FrameContext, IRenderLayer } from '../core/types';
+import type { TerrainGrid } from '../core/TerrainGrid';
+
+/** A shadow footprint (tree / building) that darkens the grass beneath it. */
+export interface GrassDarkSpot {
+  x: number;
+  y: number;
+  radius: number;
+  strength: number;
+}
+
+const MAX_DARK_SPOTS = 16;
 
 const GRASS_VERTEX_SHADER = /* glsl */ `
-  attribute float aGlyphIndex;
-  attribute vec3 aColor;
+  attribute vec3 aBase;
+  attribute vec3 aTip;
   attribute float aPhase;
 
   uniform float uTime;
   uniform vec2 uPlayerPos;
 
-  varying vec2 vUv;
-  varying float vGlyphIndex;
-  varying vec3 vColor;
+  varying vec3 vBase;
+  varying vec3 vTip;
+  varying float vTipT;
   varying vec2 vWorldPos;
-  varying float vBend;
 
   void main() {
-    vUv = uv;
-    vGlyphIndex = aGlyphIndex;
-    vColor = aColor;
+    vBase = aBase;
+    vTip = aTip;
+    vTipT = uv.y;
 
-    // Blade base position (mesh-local) converted back into gameplay (x, y).
+    // Blade base (gameplay x, y) from the instance transform.
     vec4 baseLocal = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
     vec4 baseWorld = modelMatrix * baseLocal;
-    vWorldPos = vec2(baseWorld.x, -baseWorld.z);
+    vec2 worldPos = vec2(baseWorld.x, -baseWorld.z);
+    vWorldPos = worldPos;
 
     float tipWeight = uv.y;
 
-    float windWave = sin(uTime * 2.2 + vWorldPos.x * 0.35 + vWorldPos.y * 0.2 + aPhase);
-    float windGust = sin(uTime * 0.9 + vWorldPos.x * 0.12) * 0.5 + 0.5;
-    float swayX = windWave * (0.14 + windGust * 0.12) * tipWeight;
+    // Smooth wind sway.
+    float windWave = sin(uTime * 2.2 + worldPos.x * 0.35 - worldPos.y * 0.2 + aPhase);
+    float windGust = 0.5 + 0.5 * sin(uTime * 0.9 + worldPos.x * 0.12);
+    float swayX = windWave * (0.16 + windGust * 0.14) * tipWeight;
+    float swayZ = cos(uTime * 1.7 + worldPos.y * 0.3 + aPhase) * 0.05 * tipWeight;
 
-    vec2 toBlade = vWorldPos - uPlayerPos;
+    // Part cleanly around the player's feet.
+    vec2 toBlade = worldPos - uPlayerPos;
     float dist = length(toBlade);
-    float pushRadius = 2.6;
-    float pushStrength = smoothstep(pushRadius, 0.2, dist);
+    float pushStrength = 1.0 - smoothstep(0.2, 2.6, dist);
     vec2 pushDir = dist > 0.001 ? normalize(toBlade) : vec2(1.0, 0.0);
-    vec2 playerBend = pushDir * pushStrength * 0.85 * tipWeight;
-    vBend = pushStrength;
+    vec2 playerBend = pushDir * pushStrength * 0.9 * tipWeight;
 
     vec3 displaced = position;
     displaced.x += swayX + playerBend.x;
-    displaced.y += playerBend.y * 0.5 - pushStrength * 0.18 * tipWeight;
+    displaced.z += swayZ + playerBend.y * 0.6;
+    displaced.y -= pushStrength * 0.22 * tipWeight;
 
     vec4 worldPosition = modelMatrix * instanceMatrix * vec4(displaced, 1.0);
     gl_Position = projectionMatrix * viewMatrix * worldPosition;
@@ -51,44 +62,64 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
 `;
 
 const GRASS_FRAGMENT_SHADER = /* glsl */ `
-  uniform sampler2D uAtlas;
-  uniform vec2 uAtlasGrid;
-  uniform vec2 uPlayerPos;
+  uniform vec4 uDarkSpots[16];
+  uniform float uDarkCount;
 
-  varying vec2 vUv;
-  varying float vGlyphIndex;
-  varying vec3 vColor;
+  varying vec3 vBase;
+  varying vec3 vTip;
+  varying float vTipT;
   varying vec2 vWorldPos;
-  varying float vBend;
 
   void main() {
-    float idx = floor(vGlyphIndex + 0.5);
-    float col = mod(idx, uAtlasGrid.x);
-    float row = floor(idx / uAtlasGrid.x);
+    // Base -> tip emerald gradient.
+    vec3 col = mix(vBase, vTip, vTipT);
 
-    vec2 atlasUv = vec2(
-      (col + vUv.x) / uAtlasGrid.x,
-      1.0 - ((row + 1.0 - vUv.y) / uAtlasGrid.y)
-    );
+    // Darken under tree / building footprints so the grass reads as shadowed
+    // ground instead of a flat luminous carpet.
+    float dark = 1.0;
+    for (int i = 0; i < 16; i++) {
+      if (float(i) >= uDarkCount) break;
+      vec4 s = uDarkSpots[i];
+      float d = distance(vWorldPos, s.xy);
+      dark *= 1.0 - s.w * (1.0 - smoothstep(0.0, s.z, d));
+    }
+    col *= dark;
 
-    float alpha = texture2D(uAtlas, atlasUv).a;
-    if (alpha < 0.15) discard;
+    // Soft tip lift so blade tops catch the moonlight.
+    col *= 0.88 + vTipT * 0.18;
 
-    float tipGlow = mix(0.86, 1.04, vUv.y);
-    vec3 base = vColor * tipGlow;
-
-    float dist = distance(vWorldPos, uPlayerPos);
-    float warm = smoothstep(6.0, 0.4, dist);
-    base += vec3(0.16, 0.1, 0.03) * warm * 0.5;
-
-    float footDist = distance(vWorldPos, uPlayerPos);
-    float depression = smoothstep(1.7, 0.15, footDist) * 0.28;
-    float shadow = (1.0 - vBend * 0.22) * (1.0 - depression);
-
-    gl_FragColor = vec4(base * shadow, alpha);
+    gl_FragColor = vec4(col, 1.0);
   }
 `;
 
+/** A single tapered grass blade quad, base at y=0, tip at y=height, facing +Z. */
+function buildBladeGeometry(): THREE.BufferGeometry {
+  const halfW = 0.05;
+  const height = 0.55;
+  const tipScale = 0.12;
+
+  const positions = new Float32Array([
+    -halfW, 0, 0,
+    halfW, 0, 0,
+    halfW * tipScale, height, 0,
+    -halfW * tipScale, height, 0,
+  ]);
+  const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
+  const indices = [0, 1, 2, 0, 2, 3];
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  return geometry;
+}
+
+/**
+ * Razor-sharp depth-tested 3D grass. Blades are crisp thin emerald quads swaying
+ * in the wind and parting around the player, composited over the ASCII pass by
+ * the AsciiPostProcess depth prepass. No glyph/atlas sampling here — the whole
+ * field stays sharp and is only occluded by the real 3D world via hardware depth.
+ */
 export class GrassLayer implements IRenderLayer {
   public readonly mesh: THREE.InstancedMesh;
   private readonly material: THREE.ShaderMaterial;
@@ -97,77 +128,110 @@ export class GrassLayer implements IRenderLayer {
     return this.mesh;
   }
 
-  constructor(atlas: GlyphAtlas, terrain: TerrainGrid, count = 26000, areaSize = 55) {
-    const geometry = new THREE.PlaneGeometry(0.46, 0.55);
+  constructor(terrain: TerrainGrid, count = 42000, areaSize = 55) {
+    const geometry = buildBladeGeometry();
 
-    const glyphIndices = new Float32Array(count);
-    const colors = new Float32Array(count * 3);
+    const baseColors = new Float32Array(count * 3);
+    const tipColors = new Float32Array(count * 3);
     const phases = new Float32Array(count);
 
-    const bladeChars = ['/', '|', '\\', '|', '/'];
+    // Nocturnal emerald-teal palette: #14422a base -> #2d784e tips.
+    const BASE_R = 0x14 / 255;
+    const BASE_G = 0x42 / 255;
+    const BASE_B = 0x2a / 255;
+    const TIP_R = 0x2d / 255;
+    const TIP_G = 0x78 / 255;
+    const TIP_B = 0x4e / 255;
 
-    const dummy = new THREE.Object3D();
+    // x, y, radius, strength per shadow footprint.
+    const darkSpotUniforms = new Float32Array(MAX_DARK_SPOTS * 4);
+
     this.material = new THREE.ShaderMaterial({
       vertexShader: GRASS_VERTEX_SHADER,
       fragmentShader: GRASS_FRAGMENT_SHADER,
       uniforms: {
-        uAtlas: { value: atlas.texture },
-        uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
-        uPlayerPos: { value: new THREE.Vector2(0, 0) },
         uTime: { value: 0 },
+        uPlayerPos: { value: new THREE.Vector2(0, 0) },
+        uDarkSpots: { value: darkSpotUniforms },
+        uDarkCount: { value: 0 },
       },
-      transparent: true,
+      depthTest: true,
       depthWrite: false,
     });
 
     this.mesh = new THREE.InstancedMesh(geometry, this.material, count);
-    // Lay the whole blade field flat on the ground (Pass 2 upgrades this to a
-    // crisp depth-tested post-ASCII grass pass).
-    this.mesh.rotation.x = -Math.PI / 2;
+    this.mesh.frustumCulled = false;
 
-    let i = 0;
-    while (i < count) {
+    const dummy = new THREE.Object3D();
+
+    let placed = 0;
+    let attempts = 0;
+    while (placed < count && attempts < count * 8) {
+      attempts++;
       const x = (Math.random() - 0.5) * areaSize;
       const y = (Math.random() - 0.5) * areaSize;
 
-      const onPath = terrain.getPathMask(x, y) > 0.6;
-      if (onPath && Math.random() < 0.8) continue;
+      // Cleared off the river channel/shoreline and the dirt footpath.
+      if (terrain.getRiverSDF(x, y) < 0.25) continue;
+      if (terrain.getPathMask(x, y) > 0.6) continue;
 
-      const scale = 0.8 + Math.random() * 0.5;
-      dummy.position.set(x, y, 0.02);
-      dummy.scale.set(scale, scale, 1);
+      const isFlower = Math.random() < 0.015;
+
+      const heightScale = isFlower ? 0.3 + Math.random() * 0.18 : 0.8 + Math.random() * 0.5;
+      const widthScale = isFlower ? 1.6 + Math.random() * 0.8 : 0.7 + Math.random() * 0.6;
+
+      dummy.position.set(x, 0.01, -y);
+      dummy.rotation.set(0, (Math.random() - 0.5) * 0.5, (Math.random() - 0.5) * 0.3);
+      dummy.scale.set(widthScale, heightScale, 1);
       dummy.updateMatrix();
-      this.mesh.setMatrixAt(i, dummy.matrix);
+      this.mesh.setMatrixAt(placed, dummy.matrix);
 
-      phases[i] = Math.random() * Math.PI * 2;
+      phases[placed] = Math.random() * Math.PI * 2;
 
-      const roll = Math.random();
-      if (roll < 0.012) {
-        glyphIndices[i] = atlas.getIndex(Math.random() < 0.5 ? '*' : 'o');
-        colors[i * 3 + 0] = 0.94;
-        colors[i * 3 + 1] = 0.82;
-        colors[i * 3 + 2] = 0.58;
-      } else if (roll < 0.025) {
-        glyphIndices[i] = atlas.getIndex('.');
-        colors[i * 3 + 0] = 0.86;
-        colors[i * 3 + 1] = 0.92;
-        colors[i * 3 + 2] = 0.98;
+      if (isFlower) {
+        // Sparse crisp white / warm-cream wildflower specks.
+        const warm = Math.random() < 0.5;
+        const r = warm ? 0.95 : 0.94;
+        const g = warm ? 0.85 : 0.9;
+        const b = warm ? 0.6 : 0.9;
+        baseColors[placed * 3 + 0] = r;
+        baseColors[placed * 3 + 1] = g;
+        baseColors[placed * 3 + 2] = b;
+        tipColors[placed * 3 + 0] = Math.min(1, r + 0.03);
+        tipColors[placed * 3 + 1] = Math.min(1, g + 0.03);
+        tipColors[placed * 3 + 2] = Math.min(1, b + 0.03);
       } else {
-        const char = bladeChars[Math.floor(Math.random() * bladeChars.length)];
-        glyphIndices[i] = atlas.getIndex(char);
-        const shade = 0.75 + Math.random() * 0.5;
-        colors[i * 3 + 0] = 0.13 * shade;
-        colors[i * 3 + 1] = 0.34 * shade;
-        colors[i * 3 + 2] = 0.22 * shade;
+        const shade = 0.85 + Math.random() * 0.35;
+        baseColors[placed * 3 + 0] = BASE_R * shade;
+        baseColors[placed * 3 + 1] = BASE_G * shade;
+        baseColors[placed * 3 + 2] = BASE_B * shade;
+        tipColors[placed * 3 + 0] = TIP_R * shade;
+        tipColors[placed * 3 + 1] = TIP_G * shade;
+        tipColors[placed * 3 + 2] = TIP_B * shade;
       }
 
-      i++;
+      placed++;
     }
 
-    geometry.setAttribute('aGlyphIndex', new THREE.InstancedBufferAttribute(glyphIndices, 1));
-    geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(colors, 3));
+    this.mesh.count = placed;
+    geometry.setAttribute('aBase', new THREE.InstancedBufferAttribute(baseColors, 3));
+    geometry.setAttribute('aTip', new THREE.InstancedBufferAttribute(tipColors, 3));
     geometry.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phases, 1));
     this.mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /** Shadow footprints that darken the grass (trees, buildings, props). */
+  public setDarkSpots(spots: GrassDarkSpot[]): void {
+    const value = this.material.uniforms.uDarkSpots.value as Float32Array;
+    const count = Math.min(spots.length, MAX_DARK_SPOTS);
+    for (let i = 0; i < count; i++) {
+      const s = spots[i];
+      value[i * 4 + 0] = s.x;
+      value[i * 4 + 1] = s.y;
+      value[i * 4 + 2] = s.radius;
+      value[i * 4 + 3] = s.strength;
+    }
+    this.material.uniforms.uDarkCount.value = count;
   }
 
   public update(ctx: FrameContext): void {

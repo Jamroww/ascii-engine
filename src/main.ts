@@ -15,7 +15,7 @@ engine.setLevelManager(level);
 
 level.loadLevel(LevelManager.createDefaultVillageLevel());
 
-engine.addLayer(new WeatherLayer(engine.atlas));
+engine.addWeatherLayer(new WeatherLayer(engine.atlas));
 
 engine.start();
 

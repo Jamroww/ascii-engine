@@ -85,7 +85,7 @@ export class EditorController {
 
   /** Attach the overlay + global listeners and honour `?editor=1`. */
   public initialize(): void {
-    this.engine.scene.add(this.overlayGroup);
+    this.engine.overlayScene.add(this.overlayGroup);
     this.overlayGroup.visible = false;
 
     this.engine.canvas.addEventListener('pointerdown', this.onCanvasPointerDown);
@@ -121,7 +121,7 @@ export class EditorController {
     window.removeEventListener('dragover', this.onWindowDragOver);
     window.removeEventListener('drop', this.onWindowDrop);
     this.clearColliderLines();
-    this.engine.scene.remove(this.overlayGroup);
+    this.engine.overlayScene.remove(this.overlayGroup);
     this.panel.dispose();
   }
 
@@ -446,7 +446,7 @@ export class EditorController {
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.LineBasicMaterial({ color: 0x22ff88 });
+    const material = new THREE.LineBasicMaterial({ color: 0x22ff88, depthTest: false });
     const line = new THREE.LineLoop(geometry, material);
     this.overlayGroup.add(line);
     return line;

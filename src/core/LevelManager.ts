@@ -2,7 +2,9 @@ import { TerrainGrid } from './TerrainGrid';
 import type { Engine } from './Engine';
 import { GroundLayer } from '../rendering/GroundLayer';
 import { GrassLayer } from '../rendering/GrassLayer';
+import type { GrassDarkSpot } from '../rendering/GrassLayer';
 import { WaterLayer } from '../rendering/WaterLayer';
+import type { WaterLight } from '../rendering/WaterLayer';
 import { ForestLayer, generateRiversideForest } from '../rendering/ForestLayer';
 import type { TreePlacement } from '../rendering/ForestLayer';
 import { BuildingLayer } from '../rendering/BuildingLayer';
@@ -192,6 +194,9 @@ export class LevelManager {
       this.rebuildForest();
       this.rebuildBuilding();
     }
+    // Keep water reflections and grass shadow footprints in sync with the move.
+    this.water?.setLights(this.collectWaterLights());
+    this.grass?.setDarkSpots(this.collectGrassDarkSpots());
     this.rebuildColliders();
   }
 
@@ -207,6 +212,8 @@ export class LevelManager {
     }
     this.water = new WaterLayer(this.terrain);
     this.engine.addLayer(this.water);
+    this.engine.waterObject = this.water.object3D;
+    this.water.setLights(this.collectWaterLights());
   }
 
   private rebuildGroundAndGrass(): void {
@@ -219,9 +226,46 @@ export class LevelManager {
       this.grass.dispose();
     }
     this.ground = new GroundLayer(this.terrain);
-    this.grass = new GrassLayer(this.engine.atlas, this.terrain);
+    this.grass = new GrassLayer(this.terrain);
     this.engine.addLayer(this.ground);
-    this.engine.addLayer(this.grass);
+    this.engine.addGrassLayer(this.grass);
+    this.grass.setDarkSpots(this.collectGrassDarkSpots());
+  }
+
+  /** Warm light sources (cottages, dock, shrine) reflected on the water. */
+  private collectWaterLights(): WaterLight[] {
+    const lights: WaterLight[] = [];
+    for (const e of this.data.entities) {
+      if (e.kind === 'building' || e.kind === 'shrine') {
+        lights.push({ x: e.x, y: e.y, radius: 3.6, intensity: 1.0 });
+      }
+    }
+    return lights;
+  }
+
+  /** Shadow footprints (trees, buildings, props) that darken the grass. */
+  private collectGrassDarkSpots(): GrassDarkSpot[] {
+    const spots: GrassDarkSpot[] = [];
+    for (const e of this.data.entities) {
+      switch (e.kind) {
+        case 'tree':
+          spots.push({ x: e.x, y: e.y, radius: 2.4, strength: 0.45 });
+          break;
+        case 'building':
+          spots.push({ x: e.x, y: e.y, radius: 3.2, strength: 0.5 });
+          break;
+        case 'prop':
+          spots.push({ x: e.x, y: e.y, radius: 1.6, strength: 0.35 });
+          break;
+        case 'shrine':
+        case 'node':
+          spots.push({ x: e.x, y: e.y, radius: 1.8, strength: 0.35 });
+          break;
+        default:
+          break;
+      }
+    }
+    return spots;
   }
 
   private rebuildForest(): void {

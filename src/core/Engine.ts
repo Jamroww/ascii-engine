@@ -43,6 +43,14 @@ export class Engine {
   public readonly atlas: GlyphAtlas;
   public readonly collision = new CollisionSystem();
   public readonly scene: THREE.Scene;
+  /** Depth-tested 3D grass, composited over the ASCII pass. */
+  public readonly grassScene = new THREE.Scene();
+  /** Rain / fireflies / blight spores, rendered above the composite. */
+  public readonly weatherScene = new THREE.Scene();
+  /** Dev-editor collider rings, rendered last and always on top. */
+  public readonly overlayScene = new THREE.Scene();
+  /** Water plane reference, hidden during the depth-only prepass. */
+  public waterObject: THREE.Object3D | null = null;
 
   private readonly container: HTMLElement;
   private readonly renderer: THREE.WebGLRenderer;
@@ -106,6 +114,9 @@ export class Engine {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.setClearColor(0x000000, 1);
+    // Every clear is managed explicitly by the multi-pass renderer so a stray
+    // autoClear can never wipe the ASCII pass underneath the overlays.
+    this.renderer.autoClear = false;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
@@ -136,7 +147,7 @@ export class Engine {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    this.moonLight = new THREE.DirectionalLight(0xdfe8ff, 2.2);
+    this.moonLight = new THREE.DirectionalLight(0xdfe8ff, 2.6);
     this.moonLight.position.set(-16, 28, 16);
     this.moonLight.castShadow = true;
     this.moonLight.shadow.mapSize.set(2048, 2048);
@@ -152,7 +163,7 @@ export class Engine {
     this.scene.add(this.moonLight);
     this.scene.add(this.moonLight.target);
 
-    this.hemiLight = new THREE.HemisphereLight(0x6a829c, 0x1a241e, 0.45);
+    this.hemiLight = new THREE.HemisphereLight(0x6a829c, 0x1a241e, 0.75);
     this.scene.add(this.hemiLight);
 
     // Soft physically-decaying warm hip lantern.
@@ -174,7 +185,7 @@ export class Engine {
     this.progression.setHealHandler((amount) => this.stats.heal(amount));
 
     this.applyViewport();
-    this.postProcess.setSize(this.renderer.domElement.width, this.renderer.domElement.height);
+    this.postProcess.setSize(this.renderer);
     this.camera.updateMatrixWorld(true);
     window.addEventListener('resize', this.onResize);
   }
@@ -184,10 +195,24 @@ export class Engine {
     this.scene.add(layer.object3D);
   }
 
+  /** Add a layer whose object renders in the separate depth-tested grass pass. */
+  public addGrassLayer(layer: IRenderLayer): void {
+    this.layers.push(layer);
+    this.grassScene.add(layer.object3D);
+  }
+
+  /** Add a layer whose object renders above the ASCII + grass composite. */
+  public addWeatherLayer(layer: IRenderLayer): void {
+    this.layers.push(layer);
+    this.weatherScene.add(layer.object3D);
+  }
+
   public removeLayer(layer: IRenderLayer): void {
     const i = this.layers.indexOf(layer);
     if (i >= 0) this.layers.splice(i, 1);
     this.scene.remove(layer.object3D);
+    this.grassScene.remove(layer.object3D);
+    this.weatherScene.remove(layer.object3D);
   }
 
   public setTerrain(terrain: TerrainGrid): void {
@@ -299,8 +324,17 @@ export class Engine {
         layer.preRender?.(this.renderer);
       }
 
-      // worldScene -> sceneRT -> AsciiPostProcess -> screen.
-      this.postProcess.render(this.renderer, this.scene, this.camera);
+      // worldScene -> sceneRT -> AsciiPostProcess -> screen, then depth-tested
+      // grass, weather and the editor overlay composited on top.
+      this.postProcess.render(
+        this.renderer,
+        this.scene,
+        this.camera,
+        this.grassScene,
+        this.weatherScene,
+        this.overlayScene,
+        this.waterObject,
+      );
     };
     tick();
   }
@@ -771,7 +805,7 @@ export class Engine {
     const h = this.container.clientHeight;
     this.renderer.setSize(w, h);
     this.applyViewport();
-    this.postProcess.setSize(this.renderer.domElement.width, this.renderer.domElement.height);
+    this.postProcess.setSize(this.renderer);
   };
 
   public dispose(): void {
