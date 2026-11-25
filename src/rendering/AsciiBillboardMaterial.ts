@@ -7,7 +7,7 @@ import type { BakedAsciiSprite } from './AsciiModelBaker';
  * boulder and a large cottage are quantized at the same world scale, so glyphs
  * never look chunky on one model and fine on another.
  */
-export const GLYPH_WORLD_SIZE = 0.18;
+export const GLYPH_WORLD_SIZE = 0.12;
 
 const BILLBOARD_VERTEX_SHADER = /* glsl */ `
   varying vec2 vUv;
@@ -23,6 +23,7 @@ const BILLBOARD_FRAGMENT_SHADER = /* glsl */ `
   uniform vec2 uAtlasGrid;
   uniform vec2 uGlyphGrid;
   uniform float uFlash;
+  uniform float uLumLift;
   uniform vec3 uTint;
   uniform float uTintStrength;
   uniform float uAlpha;
@@ -40,8 +41,10 @@ const BILLBOARD_FRAGMENT_SHADER = /* glsl */ `
     if (tex.a < 0.1) discard;
 
     // 3. Map luminance to the density ramp (GlyphAtlas indices 1..11: .,:;-=+*#%@).
+    //    uLumLift raises the floor so dark cloaks/coats quantize into legible
+    //    silver-grey glyphs instead of crushing to black.
     float lum = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
-    lum = clamp((lum - 0.16) * 1.7, 0.0, 1.0);
+    lum = clamp((lum - 0.16 + uLumLift) * 1.7, 0.0, 1.0);
     float rampIndex = floor(lum * 10.0) + 1.0;
 
     float col = mod(rampIndex, uAtlasGrid.x);
@@ -112,6 +115,7 @@ export function createBillboardMaterial(
         value: sprite ? glyphGridFor(sprite.worldWidth, sprite.worldHeight) : new THREE.Vector2(16, 16),
       },
       uFlash: { value: 0 },
+      uLumLift: { value: 0 },
       uTint: { value: new THREE.Color(1.0, 0.95, 0.55) },
       uTintStrength: { value: 0 },
       uAlpha: { value: 1 },

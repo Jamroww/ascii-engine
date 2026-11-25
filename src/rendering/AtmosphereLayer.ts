@@ -32,10 +32,12 @@ const ATMOSPHERE_FRAGMENT_SHADER = /* glsl */ `
 
     // Warm radial lantern pool centred on the player, breathing gently.
     // Virtue widens/warms it, corruption tightens it, a burst briefly flares it.
-    float radius = uLanternRadius + sin(uTime * 1.3) * 0.6
+    float radius = uLanternRadius + sin(uTime * 1.3) * 0.8
       + uVirtue * 2.5 - uCorruption * 1.6 + uBurstGlow * 6.0;
-    float lantern = 1.0 - smoothstep(0.0, max(radius, 0.001), dist);
-    float warmGlow = lantern * lantern;
+    radius = max(radius, 2.0);
+    // Soft falloff with a broad bright core and zero hard ring edge.
+    float lantern = 1.0 - smoothstep(radius * 0.25, radius, dist);
+    float warmGlow = lantern * lantern * 0.5 + lantern * 0.5;
 
     // Outer fog: moody cool-slate darkness creeping in past the lantern pool.
     float fog = smoothstep(uFogNear, uFogFar, dist);
@@ -43,19 +45,19 @@ const ATMOSPHERE_FRAGMENT_SHADER = /* glsl */ `
     // Softened screen-space vignette for the viewport corners.
     vec2 rel = (vWorldPos - uPlayerPos) / uViewSize;
     float edge = max(abs(rel.x), abs(rel.y));
-    float corner = smoothstep(0.38, 0.62, edge);
+    float corner = smoothstep(0.42, 0.68, edge);
 
-    // The lantern clears darkness near the player; keep the outer fade gentle.
-    float dark = clamp(max(fog, corner) * (1.0 - lantern * 0.55), 0.0, 0.8);
+    // The lantern clears darkness near the player; the outer fade never crushes
+    // the village to pure black (moody dark-slate floor ~30% visibility).
+    float dark = clamp(max(fog, corner) * (1.0 - lantern * 0.7), 0.0, 0.66);
 
-    // Cool slate in the dark, warmed by a faint amber wash under the lantern.
-    // Virtue and a radiant burst pull the pool warmer; corruption edges it cold.
-    vec3 color = vec3(0.022, 0.042, 0.068);
-    color += vec3(1.0, 0.50, 0.18) * warmGlow * (0.18 + uVirtue * 0.22 + uBurstGlow * 0.5);
+    // Dark slate base, warmed by the lantern; corruption edges it cold.
+    vec3 color = vec3(0.11, 0.14, 0.17);
+    color += vec3(1.0, 0.52, 0.20) * warmGlow * (0.34 + uVirtue * 0.20 + uBurstGlow * 0.5);
     color += vec3(0.24, 0.16, 0.30) * uCorruption * 0.06;
 
     float dither = hash(gl_FragCoord.xy) * 0.03 - 0.015;
-    float alpha = clamp(dark + dither + warmGlow * 0.05, 0.0, 0.84);
+    float alpha = clamp(dark + dither + warmGlow * 0.04, 0.0, 0.72);
 
     gl_FragColor = vec4(color, alpha);
   }
@@ -74,12 +76,12 @@ export class AtmosphereLayer implements IRenderLayer {
         uPlayerPos: { value: new THREE.Vector2(0, 0) },
         uViewSize: { value: new THREE.Vector2(20, 20) },
         uTime: { value: 0 },
-        uLanternRadius: { value: 10.0 },
+        uLanternRadius: { value: 14.0 },
         uVirtue: { value: 0 },
         uCorruption: { value: 0 },
         uBurstGlow: { value: 0 },
-        uFogNear: { value: 11.0 },
-        uFogFar: { value: 30.0 },
+        uFogNear: { value: 14.0 },
+        uFogFar: { value: 40.0 },
       },
       transparent: true,
       depthWrite: false,
@@ -94,9 +96,9 @@ export class AtmosphereLayer implements IRenderLayer {
 
   public setViewport(worldWidth: number, worldHeight: number): void {
     this.material.uniforms.uViewSize.value.set(worldWidth, worldHeight);
-    // Scale the lantern pool and fog with the view so the clearing stays open
-    // and legible at the finer zoomed-out scale instead of a cramped circle.
-    this.material.uniforms.uLanternRadius.value = worldHeight * 0.5;
+    // Keep the lantern pool a stable 12.5–15 world units so the clearing stays
+    // open and legible at any zoom instead of a cramped or oversized circle.
+    this.material.uniforms.uLanternRadius.value = Math.min(Math.max(worldHeight * 0.5, 12.5), 15.0);
     this.material.uniforms.uFogNear.value = worldHeight * 0.55;
     this.material.uniforms.uFogFar.value = worldHeight * 1.5;
   }

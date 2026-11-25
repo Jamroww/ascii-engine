@@ -55,7 +55,7 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
     float dist = distance(vWorldPos, uPlayerPos);
     float torchLight = smoothstep(11.0 * flicker, 1.0, dist);
 
-    vec3 ambient = vColor * 0.36;
+    vec3 ambient = vColor * 0.45;
     vec3 torchTint = vec3(1.0, 0.70, 0.40);
     vec3 lit = vColor * mix(vec3(1.0), torchTint, 0.42) * torchLight * 0.85;
 

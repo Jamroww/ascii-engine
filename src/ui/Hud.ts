@@ -21,8 +21,35 @@ export interface HudState {
   objective: string;
 }
 
-const PORTRAIT_SIZE = 128;
+const PORTRAIT_SIZE = 64;
 const TOAST_DURATION_MS = 3200;
+/** Discrete segments the vitals meters snap to (chunky stepped pixel bars). */
+const BAR_SEGMENTS = 16;
+
+// Decorative monochrome thorny vines draped across the vitals well.
+const VINES_SVG = `
+  <svg class="hud-vines" viewBox="0 0 150 320" preserveAspectRatio="none" aria-hidden="true">
+    <g fill="none" stroke-linecap="round">
+      <path class="hud-vine hud-vine--main" d="M9 312 C 28 266, 11 226, 35 188 S 24 128, 42 96 S 32 44, 54 9" />
+      <path class="hud-vine hud-vine--main" d="M141 9 C 122 56, 139 96, 115 138 S 126 186, 108 224 S 121 270, 96 312" />
+      <path class="hud-vine hud-vine--twig" d="M35 188 C 50 172, 68 164, 86 168" />
+      <path class="hud-vine hud-vine--twig" d="M115 138 C 100 122, 82 116, 64 120" />
+      <path class="hud-vine hud-vine--twig" d="M42 96 C 56 82, 74 76, 90 80" />
+    </g>
+    <g class="hud-thorns" fill="#cfcfcf">
+      <path d="M35 188 q 8 -6 16 0 q -8 6 -16 0 z" />
+      <path d="M115 138 q -8 -6 -16 0 q 8 6 16 0 z" />
+      <path d="M42 96 q 8 -5 14 1 q -7 5 -14 -1 z" />
+      <path d="M108 224 q -8 -5 -14 1 q 7 5 14 -1 z" />
+    </g>
+    <g class="hud-thorns" stroke="#8a8a8a" stroke-width="1" fill="none">
+      <path d="M24 128 l -5 -3 M30 130 l 4 -5" />
+      <path d="M126 186 l 5 -3 M120 188 l -4 -5" />
+      <path d="M11 226 l -5 -2 M19 228 l 4 -4" />
+      <path d="M139 96 l 5 -2 M132 98 l -4 -4" />
+    </g>
+  </svg>
+`;
 
 export class Hud {
   public readonly element: HTMLDivElement;
@@ -35,18 +62,22 @@ export class Hud {
   private readonly corruptionFill: HTMLDivElement;
   private readonly virtueFill: HTMLDivElement;
 
+  private readonly healthValue: HTMLSpanElement;
+  private readonly staminaValue: HTMLSpanElement;
+  private readonly corruptionValue: HTMLSpanElement;
+  private readonly virtueValue: HTMLSpanElement;
+
   private readonly objectiveEl: HTMLDivElement;
   private readonly toastEl: HTMLDivElement;
   private readonly interactEl: HTMLDivElement;
 
   private readonly dashBadge: HTMLDivElement;
   private readonly dashSweep: HTMLDivElement;
-  private readonly dashLabel: HTMLSpanElement;
+  private readonly dashName: HTMLSpanElement;
   private readonly dashState: HTMLSpanElement;
 
   private readonly burstBadge: HTMLDivElement;
   private readonly burstSweep: HTMLDivElement;
-  private readonly burstLabel: HTMLSpanElement;
   private readonly burstState: HTMLSpanElement;
 
   private toastTimer: number | null = null;
@@ -55,46 +86,78 @@ export class Hud {
     this.element = document.createElement('div');
     this.element.className = 'hud';
     this.element.innerHTML = `
-      <div class="hud-objective"></div>
       <div class="hud-toast"></div>
       <div class="hud-interact" hidden></div>
       <div class="hud-panel">
-        <div class="hud-portrait-frame">
-          <canvas class="hud-portrait" width="${PORTRAIT_SIZE}" height="${PORTRAIT_SIZE}"></canvas>
-        </div>
-        <div class="hud-bars">
-          <div class="hud-bar hud-bar--health">
-            <span class="hud-bar-label">HP</span>
-            <div class="hud-bar-track"><div class="hud-bar-fill hud-bar-fill--health"></div></div>
-          </div>
-          <div class="hud-bar hud-bar--stamina">
-            <span class="hud-bar-label">ST</span>
-            <div class="hud-bar-track"><div class="hud-bar-fill hud-bar-fill--stamina"></div></div>
-          </div>
-          <div class="hud-bar hud-bar--corruption">
-            <span class="hud-bar-label">CR</span>
-            <div class="hud-bar-track"><div class="hud-bar-fill hud-bar-fill--corruption"></div></div>
-          </div>
-          <div class="hud-bar hud-bar--virtue">
-            <span class="hud-bar-label">VR</span>
-            <div class="hud-bar-track"><div class="hud-bar-fill hud-bar-fill--virtue"></div></div>
+        <div class="hud-panel__title">WILTED<br />FLOWER</div>
+
+        <div class="hud-well hud-well--portrait">
+          <div class="hud-well__heading">TRAVELER</div>
+          <div class="hud-portrait-frame">
+            <span class="hud-rivet hud-rivet--tl"></span>
+            <span class="hud-rivet hud-rivet--tr"></span>
+            <span class="hud-rivet hud-rivet--bl"></span>
+            <span class="hud-rivet hud-rivet--br"></span>
+            <canvas class="hud-portrait" width="${PORTRAIT_SIZE}" height="${PORTRAIT_SIZE}"></canvas>
           </div>
         </div>
-        <div class="hud-badges">
-          <div class="hud-badge hud-badge--dash">
-            <div class="hud-badge__sweep"></div>
-            <div class="hud-badge__row">
-              <span class="hud-badge__label">[Space] Dash</span>
-              <span class="hud-badge__state"></span>
+
+        <div class="hud-well hud-well--vitals">
+          <div class="hud-well__heading">VITALS</div>
+          <div class="hud-stat hud-stat--health">
+            <div class="hud-stat__row">
+              <span class="hud-stat__label">HP</span>
+              <span class="hud-stat__value hud-stat__value--health">100%</span>
             </div>
+            <div class="hud-meter"><div class="hud-meter__fill hud-meter__fill--health"></div></div>
           </div>
-          <div class="hud-badge hud-badge--burst">
-            <div class="hud-badge__sweep"></div>
-            <div class="hud-badge__row">
-              <span class="hud-badge__label">[Q] Radiant Burst</span>
-              <span class="hud-badge__state"></span>
+          <div class="hud-stat hud-stat--stamina">
+            <div class="hud-stat__row">
+              <span class="hud-stat__label">ST</span>
+              <span class="hud-stat__value hud-stat__value--stamina">200</span>
             </div>
+            <div class="hud-meter"><div class="hud-meter__fill hud-meter__fill--stamina"></div></div>
           </div>
+          <div class="hud-stat hud-stat--corruption">
+            <div class="hud-stat__row">
+              <span class="hud-stat__label">CR</span>
+              <span class="hud-stat__value hud-stat__value--corruption">0</span>
+            </div>
+            <div class="hud-meter"><div class="hud-meter__fill hud-meter__fill--corruption"></div></div>
+          </div>
+          <div class="hud-stat hud-stat--virtue">
+            <div class="hud-stat__row">
+              <span class="hud-stat__label">VR</span>
+              <span class="hud-stat__value hud-stat__value--virtue">0</span>
+            </div>
+            <div class="hud-meter"><div class="hud-meter__fill hud-meter__fill--virtue"></div></div>
+          </div>
+          ${VINES_SVG}
+        </div>
+
+        <div class="hud-well hud-well--abilities">
+          <div class="hud-well__heading">ABILITIES</div>
+          <div class="hud-ability hud-ability--dash">
+            <div class="hud-ability__sweep"></div>
+            <div class="hud-ability__row">
+              <span class="hud-ability__key">[SPC]</span>
+              <span class="hud-ability__name hud-ability__name--dash">Dash</span>
+            </div>
+            <div class="hud-ability__state hud-ability__state--dash">RDY</div>
+          </div>
+          <div class="hud-ability hud-ability--burst">
+            <div class="hud-ability__sweep"></div>
+            <div class="hud-ability__row">
+              <span class="hud-ability__key">[Q]</span>
+              <span class="hud-ability__name">Radiant Burst</span>
+            </div>
+            <div class="hud-ability__state hud-ability__state--burst">RDY</div>
+          </div>
+        </div>
+
+        <div class="hud-well hud-well--objective">
+          <div class="hud-well__heading">OBJECTIVE</div>
+          <div class="hud-objective-text"></div>
         </div>
       </div>
     `;
@@ -108,24 +171,28 @@ export class Hud {
     this.portraitCtx = ctx;
     this.portraitImage = ctx.createImageData(PORTRAIT_SIZE, PORTRAIT_SIZE);
 
-    this.healthFill = this.element.querySelector('.hud-bar-fill--health') as HTMLDivElement;
-    this.staminaFill = this.element.querySelector('.hud-bar-fill--stamina') as HTMLDivElement;
-    this.corruptionFill = this.element.querySelector('.hud-bar-fill--corruption') as HTMLDivElement;
-    this.virtueFill = this.element.querySelector('.hud-bar-fill--virtue') as HTMLDivElement;
+    this.healthFill = this.element.querySelector('.hud-meter__fill--health') as HTMLDivElement;
+    this.staminaFill = this.element.querySelector('.hud-meter__fill--stamina') as HTMLDivElement;
+    this.corruptionFill = this.element.querySelector('.hud-meter__fill--corruption') as HTMLDivElement;
+    this.virtueFill = this.element.querySelector('.hud-meter__fill--virtue') as HTMLDivElement;
 
-    this.objectiveEl = this.element.querySelector('.hud-objective') as HTMLDivElement;
+    this.healthValue = this.element.querySelector('.hud-stat__value--health') as HTMLSpanElement;
+    this.staminaValue = this.element.querySelector('.hud-stat__value--stamina') as HTMLSpanElement;
+    this.corruptionValue = this.element.querySelector('.hud-stat__value--corruption') as HTMLSpanElement;
+    this.virtueValue = this.element.querySelector('.hud-stat__value--virtue') as HTMLSpanElement;
+
+    this.objectiveEl = this.element.querySelector('.hud-objective-text') as HTMLDivElement;
     this.toastEl = this.element.querySelector('.hud-toast') as HTMLDivElement;
     this.interactEl = this.element.querySelector('.hud-interact') as HTMLDivElement;
 
-    this.dashBadge = this.element.querySelector('.hud-badge--dash') as HTMLDivElement;
-    this.dashSweep = this.dashBadge.querySelector('.hud-badge__sweep') as HTMLDivElement;
-    this.dashLabel = this.dashBadge.querySelector('.hud-badge__label') as HTMLSpanElement;
-    this.dashState = this.dashBadge.querySelector('.hud-badge__state') as HTMLSpanElement;
+    this.dashBadge = this.element.querySelector('.hud-ability--dash') as HTMLDivElement;
+    this.dashSweep = this.dashBadge.querySelector('.hud-ability__sweep') as HTMLDivElement;
+    this.dashName = this.dashBadge.querySelector('.hud-ability__name--dash') as HTMLSpanElement;
+    this.dashState = this.dashBadge.querySelector('.hud-ability__state--dash') as HTMLSpanElement;
 
-    this.burstBadge = this.element.querySelector('.hud-badge--burst') as HTMLDivElement;
-    this.burstSweep = this.burstBadge.querySelector('.hud-badge__sweep') as HTMLDivElement;
-    this.burstLabel = this.burstBadge.querySelector('.hud-badge__label') as HTMLSpanElement;
-    this.burstState = this.burstBadge.querySelector('.hud-badge__state') as HTMLSpanElement;
+    this.burstBadge = this.element.querySelector('.hud-ability--burst') as HTMLDivElement;
+    this.burstSweep = this.burstBadge.querySelector('.hud-ability__sweep') as HTMLDivElement;
+    this.burstState = this.burstBadge.querySelector('.hud-ability__state--burst') as HTMLSpanElement;
   }
 
   public update(state: HudState): void {
@@ -134,13 +201,18 @@ export class Hud {
     this.setBar(this.corruptionFill, state.corruption);
     this.setBar(this.virtueFill, state.virtue);
 
+    this.healthValue.textContent = `${Math.round((state.health / state.maxHealth) * 100)}%`;
+    this.staminaValue.textContent = `${Math.round(state.stamina)}`;
+    this.corruptionValue.textContent = `${Math.round(state.corruption * 100)}`;
+    this.virtueValue.textContent = `${Math.round(state.virtue * 100)}`;
+
     this.healthFill.classList.toggle('is-low', state.health / state.maxHealth < 0.3);
     this.staminaFill.classList.toggle('is-low', state.stamina / state.maxStamina < 0.2);
 
     this.objectiveEl.textContent = state.objective;
 
-    // Dash badge: label + colour switch to Blight Dash once unlocked.
-    this.dashLabel.textContent = state.dashUnlocked ? '[Space] Blight Dash' : '[Space] Dash';
+    // Dash plate: name switches to Blight Dash once unlocked.
+    this.dashName.textContent = state.dashUnlocked ? 'Blight Dash' : 'Dash';
     this.dashBadge.classList.toggle('is-unlocked', state.dashUnlocked);
     this.updateBadge(
       this.dashBadge,
@@ -151,8 +223,7 @@ export class Hud {
       state.dashCooldownSeconds
     );
 
-    // Radiant Burst badge: dimmed until virtue unlocks it.
-    this.burstLabel.textContent = '[Q] Radiant Burst';
+    // Radiant Burst plate: dimmed until virtue unlocks it.
     this.burstBadge.classList.toggle('is-unlocked', state.radiantUnlocked);
     if (state.radiantUnlocked) {
       this.updateBadge(
@@ -210,7 +281,9 @@ export class Hud {
 
   private setBar(fill: HTMLDivElement, fraction: number): void {
     const clamped = Math.max(0, Math.min(1, fraction));
-    fill.style.width = `${clamped * 100}%`;
+    // Quantize to discrete segments so bars read as chunky stepped pixel blocks.
+    const stepped = Math.round(clamped * BAR_SEGMENTS) / BAR_SEGMENTS;
+    fill.style.width = `${stepped * 100}%`;
   }
 
   private updateBadge(
@@ -224,7 +297,7 @@ export class Hud {
     sweep.style.width = `${Math.max(0, Math.min(1, fraction)) * 100}%`;
     badge.classList.toggle('is-on-cooldown', !ready);
     if (ready) {
-      stateEl.textContent = 'READY';
+      stateEl.textContent = 'RDY';
       stateEl.classList.add('is-ready');
     } else {
       stateEl.textContent = `${seconds.toFixed(1)}s`;

@@ -27,6 +27,15 @@ export interface PlacedEntity {
   purified?: boolean;
 }
 
+/** A single circle within an asset's collider footprint, offset from its origin. */
+export interface ColliderSpec {
+  /** Horizontal offset from the entity origin, in world units. */
+  offsetX: number;
+  /** Vertical (north +Y) offset from the entity origin, in world units. */
+  offsetY: number;
+  radius: number;
+}
+
 export interface LevelData {
   id: string;
   name: string;

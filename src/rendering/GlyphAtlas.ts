@@ -35,7 +35,9 @@ export class GlyphAtlas {
     // Transparent background, pure white glyphs (tinted dynamically in shaders)
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#ffffff';
-    ctx.font = `bold ${Math.floor(cellSize * 0.8)}px ${fontFamily}`;
+    // ~94% of the cell height so dense glyphs (@ # % 8 $ = W M) fill their cell
+    // edge-to-edge, tiling into a tightly packed halftone/engraving texture.
+    ctx.font = `bold ${Math.floor(cellSize * 0.94)}px ${fontFamily}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 

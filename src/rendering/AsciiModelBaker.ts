@@ -33,7 +33,7 @@ const SIN_PITCH = Math.sin(PITCH);
 /** Framing padding around the projected model bounds (fraction of extent). */
 const FRAME_PAD = 0.06;
 
-const DEFAULT_RESOLUTION = 128;
+const DEFAULT_RESOLUTION = 192;
 
 /** Camera distance from the model centre (orthographic, so only affects clipping). */
 const CAMERA_DISTANCE = 16;
@@ -64,13 +64,14 @@ export class AsciiModelBaker {
   private readonly scene = new THREE.Scene();
   private readonly camera: THREE.OrthographicCamera;
   private readonly cache = new Map<string, BakedAsciiSprite>();
+  private readonly npcRim: THREE.DirectionalLight;
 
   constructor() {
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 60);
     this.camera.up.set(0, 1, 0);
 
     // Warm key light from the front-top, matching AsciiCharPass' look.
-    const key = new THREE.DirectionalLight(0xfff1dc, 2.5);
+    const key = new THREE.DirectionalLight(0xfff1dc, 2.9);
     key.position.set(2.5, 4.0, 3.0);
     this.scene.add(key);
 
@@ -79,12 +80,18 @@ export class AsciiModelBaker {
     rim.position.set(-3.0, 2.0, -2.5);
     this.scene.add(rim);
 
+    // Extra silver rim light, toggled on only while baking NPC models so their
+    // dark cloaks/coats lift into crisp silver-grey silhouettes instead of
+    // crushing to black.
+    this.npcRim = new THREE.DirectionalLight(0xdfe6ee, 1.7);
+    this.npcRim.position.set(-2.6, 3.2, -2.2);
+
     // Hemisphere for a soft sky/ground gradient across the flat-shaded facets.
     const hemi = new THREE.HemisphereLight(0x9fb8d0, 0x151a20, 0.85);
     this.scene.add(hemi);
 
     // Faint fill so dark sides never clip to pure black.
-    const ambient = new THREE.AmbientLight(0x3a4252, 0.55);
+    const ambient = new THREE.AmbientLight(0x3a4252, 0.35);
     this.scene.add(ambient);
   }
 
@@ -103,11 +110,12 @@ export class AsciiModelBaker {
     key: string,
     model: THREE.Object3D,
     resolution = DEFAULT_RESOLUTION,
+    options?: { npcRim?: boolean },
   ): BakedAsciiSprite {
     const cached = this.cache.get(key);
     if (cached) return cached;
 
-    const sprite = this.renderSprite(renderer, model, resolution);
+    const sprite = this.renderSprite(renderer, model, resolution, options);
     this.cache.set(key, sprite);
     return sprite;
   }
@@ -147,6 +155,7 @@ export class AsciiModelBaker {
     renderer: THREE.WebGLRenderer,
     model: THREE.Object3D,
     resolution: number,
+    options?: { npcRim?: boolean },
   ): BakedAsciiSprite {
     const box = new THREE.Box3().setFromObject(model);
     const center = box.getCenter(new THREE.Vector3());
@@ -186,6 +195,7 @@ export class AsciiModelBaker {
     target.texture.generateMipmaps = false;
 
     this.scene.add(model);
+    if (options?.npcRim) this.scene.add(this.npcRim);
 
     const prevTarget = renderer.getRenderTarget();
     const prevColor = new THREE.Color();
@@ -200,6 +210,7 @@ export class AsciiModelBaker {
     renderer.setRenderTarget(prevTarget);
     renderer.setClearColor(prevColor, prevAlpha);
 
+    if (options?.npcRim) this.scene.remove(this.npcRim);
     this.scene.remove(model);
 
     return { texture: target.texture, worldWidth, worldHeight, aspect };

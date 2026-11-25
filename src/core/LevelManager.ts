@@ -53,14 +53,14 @@ export class LevelManager {
     const entities: PlacedEntity[] = [
       // West clearing: fisher cottage with the lantern-keeper nearby.
       { id: 'cottage_fisher', kind: 'building', assetId: 'cottage_fisher', x: -7, y: 1 },
-      { id: 'npc_lantern_keeper', kind: 'npc', assetId: 'npc_lantern_keeper', x: -5, y: 2 },
+      { id: 'npc_lantern_keeper', kind: 'npc', assetId: 'npc_lantern_keeper', x: -4, y: 3 },
       { id: 'prop_fish_rack', kind: 'prop', assetId: 'prop_drying_fish_rack', x: -5, y: 5 },
       { id: 'prop_barrels', kind: 'prop', assetId: 'prop_barrels_crates', x: -9, y: 4 },
 
       // Riverfront: boathouse + wooden dock with the ferryman at his post.
       { id: 'cottage_boathouse', kind: 'building', assetId: 'cottage_boathouse', x: 2, y: 5 },
       { id: 'village_dock', kind: 'building', assetId: 'village_dock', x: 6, y: 1 },
-      { id: 'npc_ferryman', kind: 'npc', assetId: 'npc_ferryman', x: 6, y: 2 },
+      { id: 'npc_ferryman', kind: 'npc', assetId: 'npc_ferryman', x: 5.4, y: 2.2 },
 
       // Southern clearing: a dormant Light Shrine awaiting purification.
       { id: 'light_shrine', kind: 'shrine', assetId: 'light_shrine', x: -3, y: -7 },
@@ -107,6 +107,11 @@ export class LevelManager {
     const entity = this.data.entities.find((e) => e.id === id);
     if (!entity || entity.kind !== 'node') return;
     this.billboard?.setPoisonNodeAbsorbed(id, true);
+  }
+
+  /** Brighten the halo of the nearest in-range interactable (or clear it). */
+  public setInteractableHighlight(entityId: string | null): void {
+    this.billboard?.setInteractableHighlight(entityId);
   }
 
   /** Ignite a light shrine in warm gold after the player purifies it. */
@@ -321,6 +326,8 @@ export class LevelManager {
         x: e.x,
         y: e.y,
         radius: e.radius ?? AssetRegistry.getModelRadius(e.assetId),
+        colliders:
+          e.radius === undefined ? (AssetRegistry.getModelColliders(e.assetId) ?? undefined) : undefined,
       });
     }
     return placements;

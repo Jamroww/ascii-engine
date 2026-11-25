@@ -25,7 +25,7 @@ import {
   createWiltedTree,
   type TreeAsset,
 } from '../rendering/ForestLayer';
-import type { EntityKind } from './levelTypes';
+import type { ColliderSpec, EntityKind } from './levelTypes';
 
 type BuildingFactory = () => BuildingAsset;
 type TreeFactory = () => TreeAsset;
@@ -54,6 +54,8 @@ interface ModelAssetEntry {
   factory: ModelFactory;
   /** Default collider radius in world units (0 for walk-over items). */
   radius: number;
+  /** Optional multi-circle footprint; falls back to a single centered circle when omitted. */
+  colliders?: ColliderSpec[];
 }
 
 // ---------------------------------------------------------------------------
@@ -144,8 +146,30 @@ const modelAssets = new Map<string, ModelAssetEntry>([
   ['spore_spitter', { kind: 'enemy', factory: ENEMY_MODEL_FACTORIES.spore_spitter, radius: 0.6 }],
   ['blight_sentinel', { kind: 'enemy', factory: ENEMY_MODEL_FACTORIES.blight_sentinel, radius: 0.95 }],
   // Buildings
-  ['cottage_fisher', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.cottage_fisher, radius: 2.4 }],
-  ['cottage_boathouse', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.cottage_boathouse, radius: 2.4 }],
+  [
+    'cottage_fisher',
+    {
+      kind: 'building',
+      factory: BUILDING_MODEL_FACTORIES.cottage_fisher,
+      radius: 2.4,
+      colliders: [
+        { offsetX: -1.0, offsetY: 1.4, radius: 1.2 },
+        { offsetX: 1.0, offsetY: 1.4, radius: 1.2 },
+      ],
+    },
+  ],
+  [
+    'cottage_boathouse',
+    {
+      kind: 'building',
+      factory: BUILDING_MODEL_FACTORIES.cottage_boathouse,
+      radius: 2.4,
+      colliders: [
+        { offsetX: -1.0, offsetY: 1.5, radius: 1.25 },
+        { offsetX: 1.0, offsetY: 1.5, radius: 1.25 },
+      ],
+    },
+  ],
   ['village_dock', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.village_dock, radius: 0 }],
   ['stone_bridge', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.stone_bridge, radius: 0 }],
   ['fence_stone_wall', { kind: 'building', factory: BUILDING_MODEL_FACTORIES.fence_stone_wall, radius: 0.8 }],
@@ -229,6 +253,13 @@ export class AssetRegistry {
     const boulder = boulderAssets.get(assetId);
     if (boulder) return boulder.radius;
     return 0.6;
+  }
+
+  /** Optional multi-circle footprint for an asset, or null to use a single circle. */
+  public static getModelColliders(assetId: string): ColliderSpec[] | null {
+    const entry = modelAssets.get(assetId);
+    if (entry?.colliders && entry.colliders.length > 0) return entry.colliders;
+    return null;
   }
 
   public static listAssetIds(kind: EntityKind): string[] {

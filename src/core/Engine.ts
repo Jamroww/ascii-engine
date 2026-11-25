@@ -545,6 +545,7 @@ export class Engine {
     }
 
     this.currentInteract = nearest;
+    lm.setInteractableHighlight(nearest ? nearest.id : null);
     if (nearest) {
       this.hud.setInteractPrompt(this.interactPromptFor(nearest));
     } else {

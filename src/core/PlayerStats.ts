@@ -15,8 +15,8 @@ const MOVE_SPEED_THRESHOLD = 30;
 export class PlayerStats {
   health = 100;
   readonly maxHealth = 100;
-  stamina = 100;
-  readonly maxStamina = 100;
+  stamina = 200;
+  readonly maxStamina = 200;
 
   /** Live corruption read each frame by the engine (drives Blight Dash + move speed). */
   corruption = 0;
@@ -134,10 +134,11 @@ export class PlayerStats {
     const sprinting = wantSprint && moving && !this.dashActive;
 
     // Sprinting burns stamina; resting recovers it. Dashing pauses both.
+    // Regen is bumped ~1.35x (16 -> 22) so the doubled pool refills snappily.
     if (sprinting && this.stamina > 0) {
       this.stamina = Math.max(0, this.stamina - 28 * dt);
     } else if (!sprinting && !this.dashActive) {
-      this.stamina = Math.min(this.maxStamina, this.stamina + 16 * dt);
+      this.stamina = Math.min(this.maxStamina, this.stamina + 22 * dt);
     }
 
     // The cold river saps warmth; solid ground lets the traveler recover.

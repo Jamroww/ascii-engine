@@ -14,9 +14,13 @@ body,
 }
 
 /* ---------------------------------------------------------------------------
-   HUD — a full-viewport, non-interactive overlay. The panel clusters bottom-
-   left, the objective sits top-left, the toast top-centre, and the interact
-   prompt floats just above the dialogue area.
+   HUD — a full-viewport, non-interactive overlay. A fixed Doom-1993-style
+   vertical status bar hugs the left edge; toasts float top-centre and the
+   interact prompt sits just above the dialogue area, shifted right by half the
+   panel width so both stay visually centred in the remaining game area.
+
+   Aesthetic: strict white / ash-grey / charcoal / black, dithered pixel stone,
+   hard stepped bevels, zero blur, zero border-radius.
 --------------------------------------------------------------------------- */
 .hud {
   position: absolute;
@@ -24,37 +28,363 @@ body,
   pointer-events: none;
   user-select: none;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.hud-objective {
-  position: absolute;
-  top: 16px;
-  left: 16px;
-  max-width: 62vw;
-  padding: 7px 12px;
-  font-size: 12px;
-  letter-spacing: 0.5px;
-  color: #c9d8cf;
-  background: rgba(8, 12, 10, 0.6);
-  border: 1px solid #2b3a2e;
-  border-left: 3px solid #6fd07f;
-  border-radius: 6px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+/* --- Left status panel ----------------------------------------------------- */
+
+.hud-panel {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 168px;
+  z-index: 500;
+  box-sizing: border-box;
+  padding: 12px 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  scrollbar-width: none;
+
+  color: #e8e8e8;
+  border-radius: 0;
+  image-rendering: pixelated;
+
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='80' height='80' filter='url(%23n)' opacity='0.14'/%3E%3C/svg%3E"),
+    repeating-conic-gradient(#1b1b1e 0% 25%, #232326 0% 50%) 0 0 / 4px 4px;
+
+  border: 3px solid;
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+  border-bottom-color: #0e0e0e;
+  border-right-color: #0e0e0e;
+
+  box-shadow:
+    4px 4px 0 #000,
+    inset 2px 2px 0 #0e0e0e,
+    inset -2px -2px 0 #5a5a5a;
 }
+
+.hud-panel::-webkit-scrollbar {
+  display: none;
+}
+
+.hud-panel__title {
+  text-align: center;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  line-height: 1.15;
+  color: #ffffff;
+  text-shadow: 1px 1px 0 #000;
+}
+
+/* --- Recessed wells -------------------------------------------------------- */
+
+.hud-well {
+  position: relative;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #5a5a5a;
+  border-right-color: #5a5a5a;
+  background: rgba(8, 8, 10, 0.9);
+  box-shadow:
+    inset 2px 2px 0 rgba(0, 0, 0, 0.75),
+    inset -1px -1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.hud-well__heading {
+  padding: 6px 8px 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #cfcfcf;
+  text-shadow: 1px 1px 0 #000;
+  border-bottom: 2px solid #0e0e0e;
+}
+
+/* --- Portrait well --------------------------------------------------------- */
+
+.hud-well--portrait {
+  text-align: center;
+}
+.hud-well--portrait .hud-well__heading {
+  text-align: left;
+}
+
+.hud-portrait-frame {
+  position: relative;
+  width: 132px;
+  aspect-ratio: 1 / 1;
+  margin: 10px auto 12px;
+  padding: 4px;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #5a5a5a;
+  border-right-color: #5a5a5a;
+  background: #060708;
+  box-shadow:
+    inset 2px 2px 0 #000,
+    inset -2px -2px 0 #2a2a2d;
+}
+
+.hud-portrait {
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  display: block;
+}
+
+.hud-rivet {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background: #9a9a9a;
+  box-shadow: 1px 1px 0 #000;
+  z-index: 2;
+}
+.hud-rivet--tl { top: 2px; left: 2px; }
+.hud-rivet--tr { top: 2px; right: 2px; }
+.hud-rivet--bl { bottom: 2px; left: 2px; }
+.hud-rivet--br { bottom: 2px; right: 2px; }
+
+/* --- Vitals well ----------------------------------------------------------- */
+
+.hud-well--vitals {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-bottom: 10px;
+  overflow: hidden;
+}
+
+.hud-stat__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 0 8px 3px;
+}
+
+.hud-stat__label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #e8e8e8;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.hud-stat__value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  text-shadow: 1px 1px 0 #000;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-meter {
+  position: relative;
+  height: 14px;
+  margin: 0 8px;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #3a3a3a;
+  border-right-color: #3a3a3a;
+  background:
+    repeating-conic-gradient(#0c0c0d 0% 25%, #161618 0% 50%) 0 0 / 4px 4px;
+  overflow: hidden;
+}
+
+/* Vertical separators that carve the meter into chunky stepped blocks. */
+.hud-meter::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: repeating-linear-gradient(90deg,
+    transparent 0,
+    transparent calc(100% / 16 - 2px),
+    rgba(0, 0, 0, 0.85) calc(100% / 16 - 2px),
+    rgba(0, 0, 0, 0.85) calc(100% / 16));
+}
+
+.hud-meter__fill {
+  position: relative;
+  z-index: 0;
+  height: 100%;
+  width: 100%;
+  transition: width 0.12s linear;
+}
+
+/* Monochrome two-tone pixel fills — contrast from brightness, never hue. */
+.hud-meter__fill--health {
+  background: linear-gradient(180deg, #ffffff 0 45%, #cfcfcf 45% 100%);
+}
+.hud-meter__fill--health.is-low {
+  background: linear-gradient(180deg, #8a8a8a 0 45%, #5a5a5a 45% 100%);
+}
+
+.hud-meter__fill--stamina {
+  background: linear-gradient(180deg, #d6d6d6 0 45%, #a8a8a8 45% 100%);
+}
+.hud-meter__fill--stamina.is-low {
+  background: linear-gradient(180deg, #7a7a7a 0 45%, #4c4c4c 45% 100%);
+}
+
+.hud-meter__fill--corruption {
+  background: linear-gradient(180deg, #b0b0b0 0 45%, #8a8a8a 45% 100%);
+}
+
+.hud-meter__fill--virtue {
+  background: linear-gradient(180deg, #e4e4e4 0 45%, #b8b8b8 45% 100%);
+}
+
+/* Creeping thorny vines draped across the vitals frames. */
+.hud-vines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  opacity: 0.7;
+  shape-rendering: crispEdges;
+}
+.hud-vine--main {
+  stroke: #b0b0b0;
+  stroke-width: 2;
+}
+.hud-vine--twig {
+  stroke: #8a8a8a;
+  stroke-width: 1.5;
+}
+
+/* --- Abilities well -------------------------------------------------------- */
+
+.hud-well--abilities {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.hud-ability {
+  position: relative;
+  margin: 0 8px;
+  padding: 7px 8px;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #5a5a5a;
+  border-right-color: #5a5a5a;
+  background: rgba(9, 9, 11, 0.92);
+  box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.75);
+  overflow: hidden;
+  transition: opacity 0.2s ease;
+}
+
+.hud-ability__sweep {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: rgba(255, 255, 255, 0.1);
+  pointer-events: none;
+}
+
+.hud-ability__row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.hud-ability__key {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #cfcfcf;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.hud-ability__name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #ffffff;
+  text-shadow: 1px 1px 0 #000;
+  text-align: right;
+}
+
+.hud-ability__state {
+  position: relative;
+  z-index: 1;
+  margin-top: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #9a9a9a;
+  text-shadow: 1px 1px 0 #000;
+  text-align: right;
+}
+.hud-ability__state.is-ready {
+  color: #ffffff;
+}
+
+.hud-ability--dash.is-unlocked {
+  border-bottom-color: #7a7a7a;
+  border-right-color: #7a7a7a;
+}
+
+.hud-ability--burst:not(.is-unlocked) {
+  opacity: 0.4;
+}
+
+/* --- Objective well -------------------------------------------------------- */
+
+.hud-well--objective {
+  margin-top: auto;
+}
+
+.hud-objective-text {
+  padding: 9px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.45;
+  letter-spacing: 0.4px;
+  color: #e8e8e8;
+  text-shadow: 1px 1px 0 #000;
+}
+
+/* --- Toast + interact prompt ----------------------------------------------- */
 
 .hud-toast {
   position: absolute;
   top: 64px;
-  left: 50%;
+  left: calc(50% + 84px);
   transform: translateX(-50%);
   padding: 8px 16px;
   font-size: 13px;
+  font-weight: 700;
   letter-spacing: 0.5px;
-  color: #f2e6c8;
-  background: rgba(16, 12, 8, 0.84);
-  border: 1px solid #5a4a2e;
-  border-radius: 6px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+  color: #ffffff;
+  text-shadow: 1px 1px 0 #000;
+  background: rgba(12, 12, 14, 0.92);
+  border: 2px solid;
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+  border-bottom-color: #0e0e0e;
+  border-right-color: #0e0e0e;
+  box-shadow: 3px 3px 0 #000;
   opacity: 0;
   transition: opacity 0.25s ease;
   white-space: nowrap;
@@ -66,202 +396,49 @@ body,
 .hud-interact {
   position: absolute;
   bottom: 152px;
-  left: 50%;
+  left: calc(50% + 84px);
   transform: translateX(-50%);
   padding: 7px 14px;
   font-size: 12px;
+  font-weight: 700;
   letter-spacing: 0.5px;
-  color: #e8dcc0;
-  background: rgba(10, 13, 11, 0.8);
-  border: 1px solid #3a4a3c;
-  border-radius: 6px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  color: #ffffff;
+  text-shadow: 1px 1px 0 #000;
+  background: rgba(10, 10, 12, 0.9);
+  border: 2px solid;
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+  border-bottom-color: #0e0e0e;
+  border-right-color: #0e0e0e;
   white-space: nowrap;
 }
 .hud-interact[hidden] {
   display: none;
 }
 
-.hud-panel {
-  position: absolute;
-  left: 16px;
-  bottom: 16px;
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-}
-
-.hud-portrait-frame {
-  width: 76px;
-  height: 76px;
-  border: 2px solid #2b3a2e;
-  border-radius: 8px;
-  background: radial-gradient(circle at 50% 38%, #14211a, #06090a);
-  box-shadow:
-    0 0 12px rgba(0, 0, 0, 0.6),
-    inset 0 0 12px rgba(0, 0, 0, 0.6);
-  overflow: hidden;
-}
-
-.hud-portrait {
-  width: 100%;
-  height: 100%;
-  image-rendering: pixelated;
-  display: block;
-}
-
-.hud-bars {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 168px;
-}
-
-.hud-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.hud-bar-label {
-  width: 22px;
-  font-size: 10px;
-  letter-spacing: 1px;
-  color: #7f9a86;
-}
-
-.hud-bar-track {
-  flex: 1;
-  height: 10px;
-  border: 1px solid #2b3a2e;
-  border-radius: 5px;
-  background: rgba(5, 7, 9, 0.7);
-  overflow: hidden;
-}
-
-.hud-bar-fill {
-  height: 100%;
-  width: 100%;
-  border-radius: 4px;
-  transition: width 0.12s linear;
-}
-
-.hud-bar-fill--health {
-  background: linear-gradient(90deg, #4c9a5f, #6fd07f);
-  box-shadow: 0 0 6px rgba(90, 200, 120, 0.5);
-}
-
-.hud-bar-fill--health.is-low {
-  background: linear-gradient(90deg, #a03a3a, #d05b5b);
-  box-shadow: 0 0 6px rgba(220, 90, 90, 0.6);
-}
-
-.hud-bar-fill--stamina {
-  background: linear-gradient(90deg, #a8792f, #e0b44c);
-  box-shadow: 0 0 6px rgba(210, 160, 70, 0.5);
-}
-
-.hud-bar-fill--stamina.is-low {
-  background: linear-gradient(90deg, #a03a3a, #d05b5b);
-}
-
-.hud-bar-fill--corruption {
-  background: linear-gradient(90deg, #6a2fb8, #8a4ad0, #44bb66);
-  box-shadow: 0 0 6px rgba(150, 80, 220, 0.5);
-}
-
-.hud-bar-fill--virtue {
-  background: linear-gradient(90deg, #c98a1e, #ffc94d);
-  box-shadow: 0 0 6px rgba(240, 190, 80, 0.55);
-}
-
-/* --- Ability badges -------------------------------------------------------- */
-.hud-badges {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-bottom: 1px;
-}
-
-.hud-badge {
-  position: relative;
-  min-width: 136px;
-  padding: 6px 9px;
-  font-size: 10px;
-  letter-spacing: 0.5px;
-  color: #cdd6e0;
-  background: rgba(10, 14, 18, 0.72);
-  border: 1px solid #2b3642;
-  border-radius: 6px;
-  overflow: hidden;
-  transition: opacity 0.2s ease;
-}
-
-.hud-badge__sweep {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 0%;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.hud-badge__row {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.hud-badge__label {
-  color: #cdd6e0;
-}
-
-.hud-badge__state {
-  color: #6f8290;
-  font-size: 9px;
-}
-.hud-badge__state.is-ready {
-  color: #8fe6a8;
-}
-
-.hud-badge--dash.is-unlocked .hud-badge__label {
-  color: #b9f0c8;
-}
-.hud-badge--dash.is-unlocked {
-  border-color: #4c9a5f;
-}
-
-.hud-badge--burst:not(.is-unlocked) {
-  opacity: 0.42;
-}
-.hud-badge--burst.is-unlocked {
-  border-color: #8a6a2e;
-}
-.hud-badge--burst.is-unlocked .hud-badge__label {
-  color: #f2d78a;
-}
-
 /* ---------------------------------------------------------------------------
-   Dialogue overlay — bottom-centre, matching the dark moody HUD.
+   Dialogue overlay — bottom-centre of the remaining playable viewport,
+   offset right by half the HUD width.
 --------------------------------------------------------------------------- */
 .dialogue-box {
   position: absolute;
   bottom: 26px;
-  left: 50%;
+  left: calc(50% + 84px);
   transform: translateX(-50%);
-  width: min(560px, calc(100vw - 48px));
+  width: min(560px, calc(100vw - 216px));
   padding: 14px 18px;
   pointer-events: none;
   user-select: none;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  -webkit-font-smoothing: none;
   color: #d8dfd6;
-  background: rgba(8, 11, 9, 0.86);
-  border: 1px solid #2b3a2e;
-  border-radius: 8px;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+  background: rgba(8, 11, 9, 0.9);
+  border: 2px solid;
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+  border-bottom-color: #0e0e0e;
+  border-right-color: #0e0e0e;
+  box-shadow: 4px 4px 0 #000;
 }
 .dialogue-box[hidden] {
   display: none;
@@ -270,20 +447,24 @@ body,
 .dialogue-box__speaker {
   margin-bottom: 6px;
   font-size: 11px;
+  font-weight: 700;
   letter-spacing: 1.5px;
   text-transform: uppercase;
-  color: #e0b44c;
+  color: #e8e8e8;
+  text-shadow: 1px 1px 0 #000;
 }
 
 .dialogue-box__line {
   font-size: 14px;
   line-height: 1.5;
   min-height: 2.25em;
+  text-shadow: 1px 1px 0 #000;
 }
 
 .dialogue-box__hint {
   margin-top: 10px;
   font-size: 10px;
   letter-spacing: 1px;
-  color: #5d6f7e;
+  color: #9a9a9a;
+  text-shadow: 1px 1px 0 #000;
 }

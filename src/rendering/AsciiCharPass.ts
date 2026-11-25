@@ -31,10 +31,10 @@ const CHAR_FRAGMENT_SHADER = /* glsl */ `
     if (texColor.a < 0.15) discard;
 
     // 3. Map brightness (luminance) to density ramp in GlyphAtlas: .,:;-=+*#%@
-    //    Boost contrast so the traveler reads as a crisp pale silhouette.
+    //    Punchy luminance curve for bold bright-white chiaroscuro.
     float lum = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
-    lum = clamp((lum - 0.40) * 1.8 + 0.40, 0.0, 1.0);
-    float rampIndex = floor(clamp(lum, 0.0, 1.0) * 10.0) + 1.0;
+    lum = pow(clamp(lum, 0.0, 1.0), 0.72);
+    float rampIndex = floor(lum * 10.0) + 1.0;
 
     float col = mod(rampIndex, uAtlasGrid.x);
     float row = floor(rampIndex / uAtlasGrid.x);
@@ -52,9 +52,11 @@ const CHAR_FRAGMENT_SHADER = /* glsl */ `
       return;
     }
 
-    // Warm pale cloak with a bright rim so the traveler is unmistakable at
-    // the finer zoomed-out scale.
-    vec3 finalColor = mix(texColor.rgb * 1.5, vec3(1.0, 0.94, 0.84), clamp(lum * 0.85, 0.0, 1.0));
+    // Crisp bright-white chiaroscuro on lit non-emissive pixels, preserving the
+    // warm #FF9900 hip lantern.
+    float orange = clamp((texColor.r - texColor.b) * 1.5, 0.0, 1.0);
+    vec3 litColor = mix(vec3(0.97, 0.98, 1.0), texColor.rgb, orange);
+    vec3 finalColor = mix(texColor.rgb * 1.25, litColor, clamp(lum * 1.2, 0.0, 1.0));
     // Subtle cool afterimage tint while dashing.
     finalColor = mix(finalColor, vec3(0.45, 0.8, 1.0), uDashStrength);
     gl_FragColor = vec4(finalColor, 1.0);
@@ -71,6 +73,11 @@ const SHADOW_FRAGMENT_SHADER = /* glsl */ `
     gl_FragColor = vec4(0.01, 0.015, 0.02, a);
   }
 `;
+
+/** Offscreen render size for the traveler's ASCII billboard (denser packing). */
+const OFFSCREEN_SIZE = 192;
+/** Downsampled HUD portrait size (scaled up pixelated in CSS). */
+const PORTRAIT_SIZE = 64;
 
 export class AsciiCharPass {
   public readonly group = new THREE.Group();
@@ -101,12 +108,13 @@ export class AsciiCharPass {
   private walkPhase = 0;
   private facingAngle = 0;
 
-  // Read-back buffer for the live HUD portrait.
-  private readonly portraitPixels = new Uint8Array(128 * 128 * 4);
+  // Read-back buffers: full offscreen frame, then downsampled for the HUD portrait.
+  private readonly readbackPixels = new Uint8Array(OFFSCREEN_SIZE * OFFSCREEN_SIZE * 4);
+  private readonly portraitPixels = new Uint8Array(PORTRAIT_SIZE * PORTRAIT_SIZE * 4);
 
   constructor(atlas: GlyphAtlas) {
     // 1. Offscreen 3D render target.
-    this.renderTarget = new THREE.WebGLRenderTarget(128, 128, {
+    this.renderTarget = new THREE.WebGLRenderTarget(OFFSCREEN_SIZE, OFFSCREEN_SIZE, {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
       format: THREE.RGBAFormat,
@@ -118,15 +126,15 @@ export class AsciiCharPass {
     this.offscreenCamera.lookAt(0, 0.95, 0);
 
     // 2. High-contrast lighting so the ASCII luminance ramp has strong volume.
-    const keyLight = new THREE.DirectionalLight(0xfff1dc, 2.4);
-    keyLight.position.set(2.5, 4.0, 3.0);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 3.4);
+    keyLight.position.set(-2.5, 4.0, 3.0);
     this.offscreenScene.add(keyLight);
 
     const rimLight = new THREE.DirectionalLight(0x88b4ff, 1.2);
     rimLight.position.set(-3.0, 2.0, -2.5);
     this.offscreenScene.add(rimLight);
 
-    const ambient = new THREE.AmbientLight(0x3a4252, 0.6);
+    const ambient = new THREE.AmbientLight(0x3a4252, 0.22);
     this.offscreenScene.add(ambient);
 
     // Lantern glow that lights the cloak from below / behind the hand.
@@ -246,7 +254,7 @@ export class AsciiCharPass {
       uCharTex: { value: this.renderTarget.texture },
       uAtlas: { value: atlas.texture },
       uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
-      uCharGrid: { value: new THREE.Vector2(24, 28) },
+      uCharGrid: { value: new THREE.Vector2(34, 42) },
       uDashStrength: { value: 0 },
     };
 
@@ -366,7 +374,15 @@ export class AsciiCharPass {
     renderer.setClearColor(0x000000, 0);
     renderer.clear();
     renderer.render(this.offscreenScene, this.offscreenCamera);
-    renderer.readRenderTargetPixels(this.renderTarget, 0, 0, 128, 128, this.portraitPixels);
+    renderer.readRenderTargetPixels(
+      this.renderTarget,
+      0,
+      0,
+      OFFSCREEN_SIZE,
+      OFFSCREEN_SIZE,
+      this.readbackPixels
+    );
+    this.downsamplePortrait();
 
     renderer.setRenderTarget(prevTarget);
     renderer.setClearColor(prevColor, prevAlpha);
@@ -374,6 +390,36 @@ export class AsciiCharPass {
 
   public getPortraitPixels(): Uint8Array {
     return this.portraitPixels;
+  }
+
+  /** Box-downsample the full offscreen frame into the small pixelated portrait. */
+  private downsamplePortrait(): void {
+    const src = OFFSCREEN_SIZE;
+    const dst = PORTRAIT_SIZE;
+    const scale = src / dst;
+    for (let y = 0; y < dst; y++) {
+      for (let x = 0; x < dst; x++) {
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let a = 0;
+        for (let sy = 0; sy < scale; sy++) {
+          for (let sx = 0; sx < scale; sx++) {
+            const si = ((y * scale + sy) * src + (x * scale + sx)) * 4;
+            r += this.readbackPixels[si];
+            g += this.readbackPixels[si + 1];
+            b += this.readbackPixels[si + 2];
+            a += this.readbackPixels[si + 3];
+          }
+        }
+        const n = scale * scale;
+        const di = (y * dst + x) * 4;
+        this.portraitPixels[di] = r / n;
+        this.portraitPixels[di + 1] = g / n;
+        this.portraitPixels[di + 2] = b / n;
+        this.portraitPixels[di + 3] = a / n;
+      }
+    }
   }
 
   /**
