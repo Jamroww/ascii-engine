@@ -60,9 +60,9 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
     float n = fbm(vWorld * 0.38 + vec2(5.2, -3.7));
     float grain = fbm(vWorld * 0.85 + vec2(-2.3, 6.1));
 
-    // Wild deep-forest floor stays dark and cool so the 3D grass tufts still pop
-    // cleanly against a faint moonlit ground instead of a flat black floor.
-    vec3 col = mix(vec3(0.015, 0.020, 0.024), vec3(0.023, 0.031, 0.037), grain);
+    // Soil directly beneath the grass stays deep shadow so the meadow reads
+    // over darkness without grey noise bleeding up through the blades.
+    vec3 col = mix(vec3(0.008, 0.011, 0.014), vec3(0.012, 0.016, 0.020), grain);
 
     // Moonlit village clearing / trail: subtle cool-slate elevation contour bands.
     float cleared = smoothstep(0.0, 0.5, path);
@@ -71,17 +71,20 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
     float band = smoothstep(0.0, 0.5, bandF) * (1.0 - smoothstep(0.5, 1.0, bandF));
     col += vec3(0.05, 0.066, 0.085) * band * cleared;
 
-    // Warm damp-earth footpath (the packed-dirt path band).
+    // Warm damp-earth footpath: crisp pebbles, ruts and earth banding so the
+    // packed-dirt path reads immediately against the grass.
     float pathBand = smoothstep(0.6, 0.95, path);
-    vec3 dirt = vec3(0.16, 0.115, 0.072) * (0.55 + n * 0.6);
-    col = mix(col, dirt, pathBand * 0.9);
+    float rut = 0.5 + 0.5 * sin(vWorld.y * 0.9 + fbm(vWorld * 0.7) * 6.0);
+    float pebble = fbm(vWorld * 4.5 + vec2(1.7, -2.9));
+    vec3 dirt = vec3(0.17, 0.125, 0.078) * (0.5 + n * 0.45 + pebble * 0.18 + rut * 0.12);
+    col = mix(col, dirt, pathBand * 0.95);
 
-    // Rocky shoreline lips hugging the riverbank (sdf 0.0 .. +1.2) that read
-    // cleanly around and between the grass tufts.
+    // Stony riverbank edges: tactile pebbled banding hugging the shore.
     float shore = 1.0 - smoothstep(0.0, 1.2, edgeDist);
     float rockGrain = fbm(vWorld * 1.5 + vec2(-4.4, 7.8));
-    vec3 shoreCol = vec3(0.075, 0.095, 0.115) * (0.6 + rockGrain * 0.55);
-    col = mix(col, shoreCol, shore * 0.8);
+    float pebbleShore = fbm(vWorld * 3.2 + vec2(2.8, 5.1));
+    vec3 shoreCol = vec3(0.085, 0.108, 0.132) * (0.55 + rockGrain * 0.4 + pebbleShore * 0.28);
+    col = mix(col, shoreCol, shore * 0.85);
 
     // Cold blight tint where corrupted.
     col = mix(col, vec3(0.04, 0.09, 0.06), blight * 0.3);

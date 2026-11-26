@@ -46,6 +46,81 @@ function createEmissiveMaterial(color: number, emissive: number): THREE.MeshStan
   });
 }
 
+/**
+ * Readable gunmetal armor surface. `MeshPhongMaterial` yields crisp pure-white
+ * curved specular highlights against deep shadow without needing a PBR
+ * `scene.environment` cubemap (which leaves high-metalness
+ * `MeshStandardMaterial` flat black). A lowered `shininess` spreads the
+ * highlight across several ASCII cells, and an injected Fresnel rim keeps the
+ * silhouette's outer edge gleaming silver-white.
+ */
+export function createDarkSteelMaterial(): THREE.MeshPhongMaterial {
+  const material = new THREE.MeshPhongMaterial({
+    color: 0x445064,
+    specular: 0xffffff,
+    shininess: 24,
+    flatShading: false,
+  });
+  addFresnelRim(material);
+  return material;
+}
+
+/** Darker, softer inner cloak/tunic fabric so metal reads sharply against cloth. */
+export function createDarkClothMaterial(): THREE.MeshPhongMaterial {
+  return new THREE.MeshPhongMaterial({
+    color: 0x222936,
+    specular: 0x708098,
+    shininess: 14,
+    flatShading: false,
+  });
+}
+
+/**
+ * Injects a clean Fresnel rim highlight into a Phong material's fragment shader
+ * (`pow(1 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0), 2.4)`),
+ * so the outer edges of the head, shoulders, arms and striding legs always
+ * gleam silver-white against dark grass, earth and water.
+ */
+function addFresnelRim(material: THREE.MeshPhongMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uRimColor = { value: new THREE.Color(0.55, 0.62, 0.75) };
+    shader.fragmentShader = 'uniform vec3 uRimColor;\n' + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace(
+      'vec3 totalEmissiveRadiance = emissive;',
+      'vec3 totalEmissiveRadiance = emissive;\n'
+        + 'totalEmissiveRadiance += pow(1.0 - max(dot(normalize(vNormal), normalize(vViewPosition)), 0.0), 2.4) * uRimColor;',
+    );
+  };
+}
+
+/** Self-lit warm glow (no specular) for the hip lantern. */
+function createEmissivePhongMaterial(color: number, emissive: number): THREE.MeshPhongMaterial {
+  return new THREE.MeshPhongMaterial({
+    color,
+    emissive,
+    specular: 0x000000,
+    shininess: 0,
+    flatShading: false,
+  });
+}
+
+/** Pivot groups exposed for per-limb procedural animation. */
+export interface PlayerRig {
+  hips: THREE.Group;
+  torso: THREE.Group;
+  head: THREE.Group;
+  cape: THREE.Group;
+  leftLeg: THREE.Group;
+  rightLeg: THREE.Group;
+  leftKnee: THREE.Group;
+  rightKnee: THREE.Group;
+  leftArm: THREE.Group;
+  rightArm: THREE.Group;
+  leftElbow: THREE.Group;
+  rightElbow: THREE.Group;
+  weaponSocket: THREE.Group;
+}
+
 function addPart(
   parent: THREE.Object3D,
   geometry: THREE.BufferGeometry,
@@ -66,67 +141,139 @@ function addPart(
 
 /**
  * player_traveler
- * Height: ~1.84 | Hooded cloak, broad shoulders, belt satchel, warm hip lantern (#FF9900).
+ * Height: ~1.90 | Sleek dark glossy articulated humanoid: armored cuirass,
+ * hooded helm with a pointed ridge, broad pauldrons, a trailing back cape and a
+ * warm emissive hip lantern (#FF9900). The root stores a typed `PlayerRig` on
+ * `userData.rig` for per-limb animation.
  */
 export function createPlayerTravelerModel(): THREE.Group {
   const root = new THREE.Group();
   root.name = 'player_traveler';
 
-  const darkMat = createFlatMaterial(PALETTE.charcoal);
-  // Crisp bright-white hooded cloak so the traveler pops instantly against the
-  // dark nocturnal world.
-  const cloakMat = createFlatMaterial(PALETTE.cloakWhite);
-  const mantleMat = createFlatMaterial(PALETTE.paleStone);
-  const leatherMat = createFlatMaterial(PALETTE.warmUmber);
-  const lanternGlowMat = createEmissiveMaterial(PALETTE.lanternWarm, PALETTE.lanternWarm);
+  const steelMat = createDarkSteelMaterial();
+  const clothMat = createDarkClothMaterial();
+  const lanternGlowMat = createEmissivePhongMaterial(PALETTE.lanternWarm, PALETTE.lanternWarm);
 
-  // Boots planted at y = 0
-  const bootGeo = new THREE.BoxGeometry(0.2, 0.24, 0.3);
-  addPart(root, bootGeo, darkMat, [-0.16, 0.12, 0.04]);
-  addPart(root, bootGeo, darkMat, [0.16, 0.12, 0.04]);
+  // --- Hips (pelvis + belt + warm hip lantern), origin at y = 0.92 ---
+  const hips = new THREE.Group();
+  hips.position.set(0, 0.92, 0);
+  addPart(hips, new THREE.CylinderGeometry(0.19, 0.22, 0.24, 10), steelMat, [0, 0.04, 0]);
+  addPart(hips, new THREE.CylinderGeometry(0.22, 0.22, 0.1, 10), clothMat, [0, 0.17, 0]);
 
-  // Sweeping A-line cloak (LatheGeometry for chunky flared silhouette)
-  const cloakPoints = [
-    new THREE.Vector2(0.46, 0.14),
-    new THREE.Vector2(0.42, 0.55),
-    new THREE.Vector2(0.32, 1.05),
-    new THREE.Vector2(0.36, 1.38),
-    new THREE.Vector2(0.24, 1.46),
-  ];
-  addPart(root, new THREE.LatheGeometry(cloakPoints, 8), cloakMat);
+  const lantern = new THREE.Group();
+  lantern.position.set(0.24, -0.05, 0.13);
+  addPart(lantern, new THREE.CylinderGeometry(0.05, 0.07, 0.07, 8), steelMat, [0, 0.06, 0]);
+  addPart(lantern, new THREE.CylinderGeometry(0.06, 0.05, 0.07, 8), steelMat, [0, -0.06, 0]);
+  addPart(lantern, new THREE.DodecahedronGeometry(0.07, 0), lanternGlowMat, [0, 0, 0], [0, 0, 0], true);
+  hips.add(lantern);
+  root.add(hips);
 
-  // Broad shoulder mantle / pauldrons (bright contrast for ASCII upper silhouette)
-  addPart(root, new THREE.BoxGeometry(0.92, 0.22, 0.44), mantleMat, [0, 1.34, 0]);
-  const pauldronGeo = new THREE.DodecahedronGeometry(0.2, 0);
-  addPart(root, pauldronGeo, mantleMat, [-0.42, 1.32, 0.02]);
-  addPart(root, pauldronGeo, mantleMat, [0.42, 1.32, 0.02]);
+  // --- Torso (armored cuirass + broad curved pauldrons), child of hips ---
+  const torso = new THREE.Group();
+  torso.position.set(0, 0.14, 0);
+  addPart(torso, new THREE.CylinderGeometry(0.21, 0.16, 0.38, 10), steelMat, [0, 0.19, 0]);
+  addPart(torso, new THREE.SphereGeometry(0.17, 12, 10), steelMat, [0, 0.22, 0.09]);
+  addPart(torso, new THREE.SphereGeometry(0.14, 12, 10), steelMat, [-0.28, 0.39, 0.02]);
+  addPart(torso, new THREE.SphereGeometry(0.14, 12, 10), steelMat, [0.28, 0.39, 0.02]);
+  hips.add(torso);
 
-  // Chunky arms tucked near cloak
-  const armGeo = new THREE.CylinderGeometry(0.11, 0.09, 0.62, 6);
-  addPart(root, armGeo, cloakMat, [-0.42, 0.96, 0.06], [0.12, 0, 0.14]);
-  addPart(root, armGeo, cloakMat, [0.42, 0.96, 0.06], [0.18, 0, -0.14]);
+  // --- Head (rounded hooded helm/visor with a crisp pointed hood ridge) ---
+  const head = new THREE.Group();
+  head.position.set(0, 0.44, 0);
+  addPart(head, new THREE.SphereGeometry(0.16, 12, 10), steelMat, [0, 0.1, 0.05]);
+  addPart(head, new THREE.BoxGeometry(0.15, 0.05, 0.05), clothMat, [0, 0.08, 0.17]);
+  addPart(head, new THREE.ConeGeometry(0.13, 0.32, 8), steelMat, [0, 0.26, -0.1], [-0.4, 0, 0]);
+  torso.add(head);
 
-  // Shadowed face recess + oversized pointed hood
-  addPart(root, new THREE.SphereGeometry(0.18, 7, 6), darkMat, [0, 1.56, 0.08]);
-  addPart(root, new THREE.ConeGeometry(0.32, 0.54, 7), cloakMat, [0, 1.66, -0.04], [-0.28, 0, 0]);
-  addPart(root, new THREE.CylinderGeometry(0.24, 0.3, 0.24, 7), cloakMat, [0, 1.5, 0.02]);
+  // --- Cape (sleek tapered mantle hanging down the back only) ---
+  const cape = new THREE.Group();
+  cape.position.set(0, 0.34, -0.14);
+  addPart(cape, new THREE.BoxGeometry(0.36, 0.5, 0.06), clothMat, [0, -0.24, -0.02]);
+  addPart(cape, new THREE.BoxGeometry(0.2, 0.26, 0.06), clothMat, [0, -0.56, -0.01]);
+  torso.add(cape);
 
-  // Thick waist belt
-  addPart(root, new THREE.CylinderGeometry(0.35, 0.36, 0.14, 8), leatherMat, [0, 0.88, 0]);
+  // --- Legs (hip + knee pivots, cleanly spaced at x = +-0.17) ---
+  const leftLeg = buildLeg(-1, steelMat, clothMat);
+  const rightLeg = buildLeg(1, steelMat, clothMat);
+  hips.add(leftLeg.thigh);
+  hips.add(rightLeg.thigh);
 
-  // Belt satchel on left hip (-X)
-  addPart(root, new THREE.BoxGeometry(0.22, 0.28, 0.26), leatherMat, [-0.38, 0.78, 0.06], [0, 0, 0.12]);
-  addPart(root, new THREE.BoxGeometry(0.24, 0.12, 0.28), mantleMat, [-0.39, 0.88, 0.06], [0, 0, 0.12]);
+  // --- Arms (shoulder + elbow pivots, x = +-0.34) ---
+  const leftArm = buildArm(-1, steelMat, clothMat);
+  const rightArm = buildArm(1, steelMat, clothMat);
+  torso.add(leftArm.upperArm);
+  torso.add(rightArm.upperArm);
 
-  // Hip lantern on right hip (+X, forward +Z)
-  const lanternGroup = new THREE.Group();
-  lanternGroup.position.set(0.38, 0.74, 0.16);
-  addPart(lanternGroup, new THREE.CylinderGeometry(0.08, 0.11, 0.08, 6), darkMat, [0, 0.11, 0]);
-  addPart(lanternGroup, new THREE.CylinderGeometry(0.1, 0.09, 0.08, 6), darkMat, [0, -0.11, 0]);
-  addPart(lanternGroup, new THREE.DodecahedronGeometry(0.1, 0), lanternGlowMat, [0, 0, 0], [0, 0, 0], true);
-  root.add(lanternGroup);
+  // Sword socket at the right hand (child of the forearm so the blade follows
+  // the wrist); the laid-flat blade is flipped to +Z (forward).
+  const weaponSocket = new THREE.Group();
+  weaponSocket.position.set(0.03, -0.31, 0.1);
+  weaponSocket.rotation.x = Math.PI;
+  rightArm.elbow.add(weaponSocket);
+
+  const rig: PlayerRig = {
+    hips,
+    torso,
+    head,
+    cape,
+    leftLeg: leftLeg.thigh,
+    rightLeg: rightLeg.thigh,
+    leftKnee: leftLeg.knee,
+    rightKnee: rightLeg.knee,
+    leftArm: leftArm.upperArm,
+    rightArm: rightArm.upperArm,
+    leftElbow: leftArm.elbow,
+    rightElbow: rightArm.elbow,
+    weaponSocket,
+  };
+  root.userData.rig = rig;
 
   return root;
+}
+
+interface LegParts {
+  thigh: THREE.Group;
+  knee: THREE.Group;
+}
+
+function buildLeg(side: number, steel: THREE.Material, cloth: THREE.Material): LegParts {
+  const thigh = new THREE.Group();
+  thigh.position.set(side * 0.17, 0, 0);
+  // Thigh, pivoting at the hip.
+  addPart(thigh, new THREE.CapsuleGeometry(0.075, 0.26, 6, 10), steel, [0, -0.22, 0]);
+
+  // Knee joint; the shin, greave and boot hang below it so the lower leg can
+  // bend backward independently of the thigh swing.
+  const knee = new THREE.Group();
+  knee.position.set(0, -0.42, 0);
+  addPart(knee, new THREE.CapsuleGeometry(0.055, 0.26, 6, 10), cloth, [0, -0.18, 0]);
+  addPart(knee, new THREE.BoxGeometry(0.1, 0.24, 0.12), steel, [0, -0.14, 0.05]);
+  addPart(knee, new THREE.BoxGeometry(0.13, 0.14, 0.24), steel, [0, -0.42, 0.06]);
+  thigh.add(knee);
+
+  return { thigh, knee };
+}
+
+interface ArmParts {
+  upperArm: THREE.Group;
+  elbow: THREE.Group;
+}
+
+function buildArm(side: number, steel: THREE.Material, cloth: THREE.Material): ArmParts {
+  const upperArm = new THREE.Group();
+  upperArm.position.set(side * 0.34, 0.39, 0);
+  // Upper arm, pivoting at the shoulder.
+  addPart(upperArm, new THREE.CapsuleGeometry(0.06, 0.18, 6, 10), steel, [0, -0.16, 0]);
+
+  // Elbow joint; the forearm, gauntlet and hand hang below it.
+  const elbow = new THREE.Group();
+  elbow.position.set(0, -0.31, 0);
+  addPart(elbow, new THREE.CapsuleGeometry(0.05, 0.2, 6, 10), cloth, [0, -0.15, 0]);
+  addPart(elbow, new THREE.BoxGeometry(0.1, 0.2, 0.11), steel, [0, -0.13, 0.03]);
+  addPart(elbow, new THREE.SphereGeometry(0.055, 8, 6), steel, [0, -0.31, 0.06]);
+  upperArm.add(elbow);
+
+  return { upperArm, elbow };
 }
 
 /**

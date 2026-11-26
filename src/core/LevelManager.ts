@@ -252,7 +252,7 @@ export class LevelManager {
           spots.push({ x: e.x, y: e.y, radius: 2.4, strength: 0.45 });
           break;
         case 'building':
-          spots.push({ x: e.x, y: e.y, radius: 3.2, strength: 0.5 });
+          spots.push({ x: e.x, y: e.y, radius: 3.6, strength: 0.5, cull: true });
           break;
         case 'prop':
           spots.push({ x: e.x, y: e.y, radius: 1.6, strength: 0.35 });

@@ -176,7 +176,7 @@ function liftTreeMaterials(tree: THREE.Group): void {
     const mat = node.material;
     if (mat instanceof THREE.MeshStandardMaterial && !node.userData.isEmissive) {
       mat.color.offsetHSL(0, 0, 0.14);
-      mat.emissive = mat.color.clone().multiplyScalar(0.16);
+      mat.emissive = mat.color.clone().multiplyScalar(0.05);
     }
 
     const geo = node.geometry;

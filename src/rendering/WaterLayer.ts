@@ -34,6 +34,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
   uniform float uLightCount;
   uniform sampler2D uPlayerReflectionTex;
   uniform vec2 uScreenResolution;
+  uniform sampler2D uMoonTex;
 
   varying vec2 vWorld;
 
@@ -138,27 +139,23 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     }
     col += min(lightAccum, vec3(0.28, 0.14, 0.03));
 
-    // --- Sculpted reflected moon (hero landmark) ---
-    vec2 moonCenter = vec2(8.2 + uPlayerPos.x * 0.05, uPlayerPos.y * 0.85 + 1.5);
+    // --- Reflected moon: high-detail raster texture (hero landmark) ---
+    vec2 moonCenter = vec2(8.0, 2.5) + uPlayerPos * 0.12;
     vec2 moonD = vWorld - moonCenter;
     // Compensate for 3/4 camera pitch foreshortening so moon looks round on screen.
     vec2 moonEllip = vec2(moonD.x, moonD.y * 0.72);
-    // Gentle horizontal water wobble along the moon edges.
-    moonEllip.x += sin(vWorld.y * 5.5 + uTime * 2.2) * 0.12;
+    // Subtle horizontal water ripple distortion of the sampled lunar texture.
+    moonEllip.x += sin(vWorld.y * 6.0 + uTime * 2.4) * 0.16;
+    float moonRadius = 2.5;
     float moonDist = length(moonEllip);
-    float moonDisc = 1.0 - smoothstep(4.2, 4.7, moonDist);
+    float moonDisc = 1.0 - smoothstep(moonRadius - 0.4, moonRadius, moonDist);
 
-    // Bold, recognizable lunar maria / craters (low-freq seas + medium detail).
-    float mariaBroad = fbm(moonEllip * 0.42 + vec2(1.4, -0.8));
-    float mariaDetail = fbm(moonEllip * 1.15 + vec2(-1.1, 2.3));
-    float mariaMask = smoothstep(0.36, 0.64, mariaBroad * 0.72 + mariaDetail * 0.28);
-
-    // Limb darkening near disc rim for spherical 3D lunar volume.
-    float limb = 1.0 - smoothstep(2.6, 4.6, moonDist) * 0.35;
-    float moonVal = mix(0.62, 0.035, mariaMask) * limb;
+    // Sample the raster lunar texture (maria + crater rims + limb darkening).
+    vec2 moonUv = clamp(moonEllip / (moonRadius * 2.0) + 0.5, 0.0, 1.0);
+    vec3 moonCol = texture2D(uMoonTex, moonUv).rgb;
 
     // Horizontal water scanlines slicing subtly across the moon.
-    moonVal *= 0.78 + 0.22 * sin(vWorld.y * 9.0 + uTime * 2.4);
+    moonCol *= 0.78 + 0.22 * sin(vWorld.y * 9.0 + uTime * 2.4);
 
     // Soft drifting mist wisps partially veiling the moon.
     vec2 mistUv = vWorld * 0.08 + vec2(uTime * 0.05, -uTime * 0.02);
@@ -167,7 +164,6 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     // Frame the moon cleanly inside the riverbanks & beneath overhang shadows.
     float moonClip = 1.0 - smoothstep(-0.65, -0.18, edgeDist);
     float moonUnderBank = 1.0 - overhang * 0.85;
-    vec3 moonCol = vec3(0.88, 0.94, 1.06) * moonVal;
     col = mix(col, max(col, moonCol), moonDisc * moonClip * moonUnderBank * (1.0 - mist * 0.55));
     col += vec3(0.035, 0.045, 0.06) * mist * moonClip * (1.0 - overhang);
 
@@ -220,6 +216,100 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
   }
 `;
 
+/**
+ * Generate a crisp 256x256 lunar texture on an offscreen canvas: shaded maria,
+ * sharp overlapping crater rims and limb darkening. Used as the fallback moon.
+ */
+function createMoonCanvasTexture(): THREE.CanvasTexture {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+
+  if (!ctx) return texture;
+
+  const half = size / 2;
+  const radius = half * 0.97;
+  let seed = 0x5eeda11;
+
+  const rand = (): number => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 0xffffffff;
+  };
+
+  // Limb-darkened lunar sphere.
+  const base = ctx.createRadialGradient(half, half, radius * 0.2, half, half, radius);
+  base.addColorStop(0, '#eef1f6');
+  base.addColorStop(0.5, '#c9d0db');
+  base.addColorStop(0.82, '#98a1b2');
+  base.addColorStop(1, '#525a6b');
+  ctx.fillStyle = base;
+  ctx.beginPath();
+  ctx.arc(half, half, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Shaded maria (soft irregular dark seas).
+  for (let i = 0; i < 7; i++) {
+    const mx = (rand() * 2 - 1) * radius * 0.5;
+    const my = (rand() * 2 - 1) * radius * 0.5;
+    const mr = radius * (0.14 + rand() * 0.2);
+    const g = ctx.createRadialGradient(half + mx, half + my, 0, half + mx, half + my, mr);
+    g.addColorStop(0, 'rgba(64, 72, 88, 0.85)');
+    g.addColorStop(0.7, 'rgba(90, 98, 114, 0.45)');
+    g.addColorStop(1, 'rgba(140, 148, 166, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(half + mx, half + my, mr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Sharp overlapping crater rims.
+  for (let i = 0; i < 14; i++) {
+    const cx = (rand() * 2 - 1) * radius * 0.72;
+    const cy = (rand() * 2 - 1) * radius * 0.72;
+    const cr = radius * (0.05 + rand() * 0.12);
+    ctx.fillStyle = 'rgba(40, 46, 58, 0.8)';
+    ctx.beginPath();
+    ctx.arc(half + cx, half + cy, cr, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(226, 232, 242, 0.9)';
+    ctx.lineWidth = Math.max(1.5, cr * 0.22);
+    ctx.beginPath();
+    ctx.arc(half + cx, half + cy, cr * 0.96, -Math.PI * 0.75, -Math.PI * 0.15);
+    ctx.stroke();
+  }
+
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/** Swap in a custom `public/textures/moon.png` if present, else keep the canvas. */
+function loadMoonPng(uniform: { value: THREE.Texture | null }): void {
+  new THREE.TextureLoader().load(
+    '/textures/moon.png',
+    (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      uniform.value = tex;
+    },
+    undefined,
+    () => {
+      // Missing PNG: silently keep the procedural canvas moon.
+    },
+  );
+}
+
 export class WaterLayer implements IRenderLayer {
   public readonly object3D: THREE.Mesh;
   private readonly material: THREE.ShaderMaterial;
@@ -247,9 +337,15 @@ export class WaterLayer implements IRenderLayer {
         uLightCount: { value: 0 },
         uPlayerReflectionTex: { value: null },
         uScreenResolution: { value: new THREE.Vector2(1, 1) },
+        uMoonTex: { value: null },
       },
       depthWrite: false,
     });
+
+    // Crisp 256x256 procedural lunar texture, swapped for a custom PNG if the
+    // user drops one into public/textures/moon.png.
+    this.material.uniforms.uMoonTex.value = createMoonCanvasTexture();
+    loadMoonPng(this.material.uniforms.uMoonTex);
 
     const geometry = new THREE.PlaneGeometry(areaSize, areaSize);
     this.object3D = new THREE.Mesh(geometry, this.material);

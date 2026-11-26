@@ -15,6 +15,7 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
   uniform vec2 uResolution;
   uniform vec2 uCellSize;
   uniform vec2 uGridOffset;
+  uniform vec2 uSampleOffset;
   uniform vec2 uAtlasGrid;
   uniform float uGlyphCount;
   uniform float uBurstGlow;
@@ -41,7 +42,7 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
     vec2 cell = floor(shifted / uCellSize);
     vec2 cellUv = fract(shifted / uCellSize);
 
-    vec2 base = cell * uCellSize + uCellSize * 0.5 + uGridOffset;
+    vec2 base = cell * uCellSize + uCellSize * 0.5 + uSampleOffset;
 
     // Tight 2x2 sub-cell average keeps fine silhouettes, rooflines and limbs
     // razor-sharp without sub-pixel moiré shimmer.
@@ -59,13 +60,13 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
 
     // Pure #000000 floor for pitch-black ground/bank undercuts, while letting
     // moonlit buildings, trees, and midnight water remain clearly legible.
-    if (L < 0.065) {
+    if (L < 0.08) {
       gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
       return;
     }
 
     // Linear remap across the glyph ramp (no S-curve shadow crush).
-    float mapped = clamp((L - 0.065) / 0.84, 0.0, 1.0);
+    float mapped = clamp((L - 0.08) / 0.84, 0.0, 1.0);
     float idx = floor(mapped * (uGlyphCount - 1.0) + 0.5);
     float gcol = mod(idx, uAtlasGrid.x);
     float grow = floor(idx / uAtlasGrid.x);
@@ -76,12 +77,12 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
     float glyphAlpha = texture2D(uAtlasTex, atlasUv).a;
 
     // Preserve hue on midtones (slate stone, timber, russet bark, navy water).
-    // Sparse glyphs already encode darkness via coverage, so keep foreground ink
-    // visible (0.42..1.05) instead of squaring darkness with *= mapped.
+    // A dark chiaroscuro curve keeps shadows deep nocturnal while lit faces,
+    // cottage windows, the moon and the player stay sharp and bright.
     vec3 chroma = tn / max(max(tn.r, max(tn.g, tn.b)), 0.001);
     vec3 fgColor = mix(tn, chroma, 0.45);
     fgColor = mix(fgColor, vec3(1.0), smoothstep(0.78, 0.96, L));
-    fgColor *= mix(0.42, 1.05, mapped);
+    fgColor *= mix(0.14, 1.12, pow(mapped, 1.35));
 
     // Warm Radiant Burst pulse.
     fgColor += vec3(0.30, 0.16, 0.04) * uBurstGlow;
@@ -117,8 +118,9 @@ export class AsciiPostProcess {
         uSceneTex: { value: this.sceneRT.texture },
         uAtlasTex: { value: atlas.texture },
         uResolution: { value: new THREE.Vector2(1, 1) },
-        uCellSize: { value: new THREE.Vector2(5.5, 8.5) },
+        uCellSize: { value: new THREE.Vector2(6, 9) },
         uGridOffset: { value: new THREE.Vector2(0, 0) },
+        uSampleOffset: { value: new THREE.Vector2(0, 0) },
         uAtlasGrid: { value: new THREE.Vector2(atlas.cols, atlas.rows) },
         uGlyphCount: { value: atlas.count },
         uBurstGlow: { value: 0 },
@@ -145,8 +147,12 @@ export class AsciiPostProcess {
     if (width <= 0 || height <= 0) return;
     this.sceneRT.setSize(width, height);
     (this.material.uniforms.uResolution.value as THREE.Vector2).set(width, height);
+    // Strict integer physical pixels: fractional cell sizes cause nearest-neighbor
+    // glyph stroke strobing when the camera starts/stops moving.
     const dpr = renderer.getPixelRatio();
-    (this.material.uniforms.uCellSize.value as THREE.Vector2).set(5.5 * dpr, 8.5 * dpr);
+    const cellX = Math.max(5, Math.round(6 * dpr));
+    const cellY = Math.max(8, Math.round(9 * dpr));
+    (this.material.uniforms.uCellSize.value as THREE.Vector2).set(cellX, cellY);
   }
 
   public setBurstGlow(amount: number): void {
@@ -170,7 +176,14 @@ export class AsciiPostProcess {
     const py = (this.originVec.y * 0.5 + 0.5) * height;
     const ox = ((px % cellSize.x) + cellSize.x) % cellSize.x;
     const oy = ((py % cellSize.y) + cellSize.y) % cellSize.y;
-    (this.material.uniforms.uGridOffset.value as THREE.Vector2).set(ox, oy);
+    // Crisp integer grid anchor keeps glyph strokes free of sub-pixel aliasing,
+    // while a separate continuous anchor drives the world sampling so the grid
+    // never jumps a full pixel (which caused a one-frame flash on start/stop).
+    (this.material.uniforms.uGridOffset.value as THREE.Vector2).set(
+      Math.floor(ox),
+      Math.floor(oy),
+    );
+    (this.material.uniforms.uSampleOffset.value as THREE.Vector2).set(ox, oy);
   }
 
   public render(

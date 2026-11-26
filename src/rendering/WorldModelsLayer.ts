@@ -145,7 +145,7 @@ export class WorldModelsLayer implements IRenderLayer {
     model.position.set(placement.x, 0, -placement.y);
     setCastShadow(model, true);
     setReceiveShadow(model, true);
-    liftWorldModelMaterials(model);
+    liftWorldModelMaterials(model, placement.kind);
 
     const entry: WorldModelEntry = {
       placement,
@@ -215,19 +215,35 @@ function collectEmissiveLights(
 }
 
 /**
- * Lift the very dark albedos on every non-emissive surface so cottage shingles,
- * walls, docks, rowboats and russet/umber tree trunks read as rich sculpted
- * ASCII gradients rather than solid black cutouts with a single bright ridge
- * line. Also stops pitched roofs and tree canopies from receiving shadows so
+ * Give world-model surfaces clean directional contrast. Non-emissive materials
+ * get no flat ambient lift; instead only the already-bright stone / plaster /
+ * roof-trim albedos are lifted moderately so moonlit roofs read silver-slate
+ * while shaded walls and dark timber stay deep charcoal. Emissive cottage
+ * windows and doorway lanterns are boosted to warm amber so they glow out of
+ * the dark walls. Pitched roofs and tree canopies stop receiving shadows so
  * they cast crisp ground shadows without self-shadowing themselves black.
  */
-function liftWorldModelMaterials(model: THREE.Group): void {
+function liftWorldModelMaterials(model: THREE.Group, kind: EntityKind): void {
   model.traverse((node) => {
     if (!(node instanceof THREE.Mesh)) return;
     const mat = node.material;
-    if (mat instanceof THREE.MeshStandardMaterial && !node.userData.isEmissive) {
-      mat.color.offsetHSL(0, 0, 0.14);
-      mat.emissive = mat.color.clone().multiplyScalar(0.16);
+
+    if (mat instanceof THREE.MeshStandardMaterial) {
+      if (node.userData.isEmissive) {
+        // Warm amber windows / lanterns glow unmistakably out of dark walls.
+        if (kind === 'building') {
+          mat.emissive.setHex(0xffaa22);
+          mat.emissiveIntensity = 3.2;
+        }
+      } else {
+        // Lift only the bright stone / plaster / roof-trim albedos; leave the
+        // dark walls, timber and roof slate in deep shadow.
+        const hsl = { h: 0, s: 0, l: 0 };
+        mat.color.getHSL(hsl);
+        if (hsl.l > 0.4) {
+          mat.color.offsetHSL(0, 0, 0.08);
+        }
+      }
     }
 
     const geo = node.geometry;

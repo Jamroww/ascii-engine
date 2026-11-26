@@ -200,7 +200,7 @@ export class Engine {
 
     // Almost no ambient fill: unlit sides of trees/rocks/buildings drop into
     // pure black, letting the directional moonlight carve the chiaroscuro.
-    this.hemiLight = new THREE.HemisphereLight(0x7c98b8, 0x1b2822, 0.48);
+    this.hemiLight = new THREE.HemisphereLight(0x7c98b8, 0x1b2822, 0.28);
     this.scene.add(this.hemiLight);
 
     // Soft, tight physically-decaying warm hip lantern (never washes the ground).
@@ -741,6 +741,7 @@ export class Engine {
       this.playerPos.x,
       this.playerPos.y,
       this.stats.isDashing,
+      this.weapon.isSwinging,
     );
     this.weapon.update(dt, aimX, aimY, this.playerPos.x, this.playerPos.y);
 
