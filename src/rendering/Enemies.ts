@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import { createRoninModel } from './Lvl2';
 
-export type EnemyAssetId = 'blight_stalker' | 'spore_spitter' | 'blight_sentinel' | 'castle_warden';
+export type EnemyAssetId = 'blight_stalker' | 'spore_spitter' | 'blight_sentinel' | 'castle_warden' | 'the_ronin';
 
 // High-contrast palette tuned for luminance-to-ASCII glyph ramps
 const PALETTE = {
@@ -319,4 +320,5 @@ export const ENEMY_MODEL_FACTORIES: Record<EnemyAssetId, () => THREE.Group> = {
   spore_spitter: createSporeSpitterModel,
   blight_sentinel: createBlightSentinelModel,
   castle_warden: createBlightSentinelModel,
+  the_ronin: createRoninModel,
 };

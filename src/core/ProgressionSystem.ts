@@ -63,6 +63,10 @@ export class ProgressionSystem {
     if (!entry) {
       return { speaker: npcAssetId, lines: ['…'] };
     }
+    // The Ronin's pre-fight speech is always his moody opening lines.
+    if (npcAssetId === 'npc_ronin') {
+      return { speaker: entry.speaker, lines: entry.default };
+    }
     const bucket = this.selectBucket();
     return { speaker: entry.speaker, lines: entry[bucket] ?? entry.default };
   }

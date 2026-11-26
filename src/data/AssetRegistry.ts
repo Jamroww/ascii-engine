@@ -26,6 +26,7 @@ import {
   type TreeAsset,
 } from '../rendering/ForestLayer';
 import { LANDMARK_PROP_MODEL_FACTORIES } from '../rendering/Lvl1';
+import { LVL2_MODEL_FACTORIES } from '../rendering/Lvl2';
 import type { ColliderSpec, EntityKind } from './levelTypes';
 
 type BuildingFactory = () => BuildingAsset;
@@ -143,6 +144,21 @@ const enemyAssets = new Map<string, EnemyArchetype>([
       kind: 'melee',
     },
   ],
+  [
+    'the_ronin',
+    {
+      id: 'the_ronin',
+      maxHp: 320,
+      speed: 2.6,
+      radius: 0.85,
+      aggroRange: 14,
+      attackRange: 3.3,
+      telegraphTime: 0.5,
+      attackCooldown: 1.4,
+      damage: 26,
+      kind: 'melee',
+    },
+  ],
 ]);
 
 // ---------------------------------------------------------------------------
@@ -240,6 +256,31 @@ const modelAssets = new Map<string, ModelAssetEntry>([
       kind: 'prop',
       factory: LANDMARK_PROP_MODEL_FACTORIES.alley_barricade,
       radius: 1.4,
+    },
+  ],
+  // Act 2 sunset wheatfield (Lvl2.ts)
+  [
+    'great_sunset_tree',
+    {
+      kind: 'building',
+      factory: LVL2_MODEL_FACTORIES.great_sunset_tree,
+      radius: 1.7,
+    },
+  ],
+  [
+    'boss_ronin',
+    {
+      kind: 'enemy',
+      factory: LVL2_MODEL_FACTORIES.boss_ronin,
+      radius: 0.85,
+    },
+  ],
+  [
+    'stone_lantern',
+    {
+      kind: 'prop',
+      factory: LVL2_MODEL_FACTORIES.stone_lantern,
+      radius: 0.4,
     },
   ],
 ]);

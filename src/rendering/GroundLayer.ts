@@ -16,6 +16,7 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uTerrainMap;
   uniform float uWorldSize;
   uniform float uSdfRange;
+  uniform vec3 uBaseTint;
 
   varying vec2 vWorld;
 
@@ -89,6 +90,9 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
     // Cold blight tint where corrupted.
     col = mix(col, vec3(0.04, 0.09, 0.06), blight * 0.3);
 
+    // Warm sunset dry-earth tint (white = no change for Level 1).
+    col *= uBaseTint;
+
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -105,6 +109,7 @@ export class GroundLayer implements IRenderLayer {
         uTerrainMap: { value: terrain.texture },
         uWorldSize: { value: terrain.worldSize },
         uSdfRange: { value: SDF_RANGE },
+        uBaseTint: { value: new THREE.Color(1, 1, 1) },
       },
       depthWrite: false,
     });
@@ -117,6 +122,11 @@ export class GroundLayer implements IRenderLayer {
   }
 
   public update(_ctx: FrameContext): void {}
+
+  /** Warm dry-earth multiplier tint for the arena (white = no change). */
+  public setBaseTint(color: THREE.Color): void {
+    (this.material.uniforms.uBaseTint.value as THREE.Color).copy(color);
+  }
 
   public dispose(): void {
     this.object3D.geometry.dispose();

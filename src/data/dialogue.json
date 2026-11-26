@@ -114,5 +114,19 @@
     "high_virtue": [
       "You glow a little, you know. Like the lantern you carry never went out."
     ]
+  },
+  "npc_ronin": {
+    "speaker": "The Ronin",
+    "default": [
+      "The wheat bows gold and the sun bleeds low over this field. I have waited a long while for a blade worth drawing.",
+      "This world is wilting, traveler — petal by petal. And still, the field remembers how to blaze.",
+      "They say the dying land calls to the dying. Perhaps that is why you are here.",
+      "Show me your steel. If it is honest, I will meet it with mine."
+    ],
+    "quest_active": [],
+    "quest_cleared_light": [],
+    "quest_cleared_poison": [],
+    "high_corruption": [],
+    "high_virtue": []
   }
 }

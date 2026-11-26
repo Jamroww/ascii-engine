@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { TerrainGrid } from './TerrainGrid';
 import type { Engine } from './Engine';
 import { GroundLayer } from '../rendering/GroundLayer';
@@ -5,6 +6,7 @@ import { GrassLayer } from '../rendering/GrassLayer';
 import type { GrassDarkSpot, GrassExclusion } from '../rendering/GrassLayer';
 import { WaterLayer } from '../rendering/WaterLayer';
 import type { WaterLight } from '../rendering/WaterLayer';
+import { WeatherLayer } from '../rendering/WeatherLayer';
 import { ForestLayer, generateRiversideForest } from '../rendering/ForestLayer';
 import type { TreePlacement } from '../rendering/ForestLayer';
 import { BuildingLayer } from '../rendering/BuildingLayer';
@@ -13,6 +15,7 @@ import { WorldModelsLayer } from '../rendering/WorldModelsLayer';
 import type { WorldModelPlacement } from '../rendering/WorldModelsLayer';
 import { AssetRegistry } from '../data/AssetRegistry';
 import type { LevelData, PlacedEntity } from '../data/levelTypes';
+import { getLevelTheme, hexToColor, type LevelTheme } from './LevelTheme';
 
 /**
  * Owns the active level: its `LevelData`, `TerrainGrid`, and the world layers
@@ -23,11 +26,13 @@ import type { LevelData, PlacedEntity } from '../data/levelTypes';
 export class LevelManager {
   private data!: LevelData;
   private terrain!: TerrainGrid;
+  private theme: LevelTheme = getLevelTheme('act1_harbor');
   private readonly engine: Engine;
 
   private ground: GroundLayer | null = null;
   private grass: GrassLayer | null = null;
   private water: WaterLayer | null = null;
+  private weather: WeatherLayer | null = null;
   private forest: ForestLayer | null = null;
   private building: BuildingLayer | null = null;
   private worldModels: WorldModelsLayer | null = null;
@@ -120,6 +125,38 @@ export class LevelManager {
     };
   }
 
+  /** Act 2 golden sunset wheatfield: the great tree + The Ronin duel. */
+  public static createSunsetWheatfieldLevel(): LevelData {
+    const terrain = TerrainGrid.bakeAct2Wheatfield();
+
+    const entities: PlacedEntity[] = [
+      // The great tree anchors the north side of the dueling clearing.
+      { id: 'great_tree', kind: 'building', assetId: 'great_sunset_tree', x: 0, y: 4.5 },
+
+      // Weathered stone lanterns / boundary stones ringing the clearing.
+      { id: 'lantern_1', kind: 'prop', assetId: 'stone_lantern', x: -9.5, y: -1.5 },
+      { id: 'lantern_2', kind: 'prop', assetId: 'stone_lantern', x: 9.5, y: -1.5 },
+      { id: 'lantern_3', kind: 'prop', assetId: 'stone_lantern', x: -7.5, y: 7.5 },
+      { id: 'lantern_4', kind: 'prop', assetId: 'stone_lantern', x: 7.5, y: 7.5 },
+      { id: 'boundary_1', kind: 'prop', assetId: 'stone_lantern', x: -11.5, y: -5.5 },
+      { id: 'boundary_2', kind: 'prop', assetId: 'stone_lantern', x: 11.5, y: -5.5 },
+
+      // The Ronin, standing calmly before the tree in his peaceful pre-fight state.
+      { id: 'the_ronin', kind: 'enemy', assetId: 'the_ronin', x: 0, y: 1.5, group: 'boss' },
+    ];
+
+    return {
+      id: 'act2_wheatfield',
+      name: 'Act 2 — Sunset Wheatfield',
+      worldSize: terrain.worldSize,
+      gridResolution: terrain.resolution,
+      terrainBase64: terrain.toBase64(),
+      forestSeed: 7,
+      spawn: { x: 0, y: -14 },
+      entities,
+    };
+  }
+
   public getTerrain(): TerrainGrid {
     return this.terrain;
   }
@@ -150,6 +187,7 @@ export class LevelManager {
 
   public loadLevel(data: LevelData): void {
     this.data = data;
+    this.theme = getLevelTheme(data.id);
     this.terrain = TerrainGrid.fromBase64(data.terrainBase64, data.gridResolution, data.worldSize);
     this.engine.setTerrain(this.terrain);
     this.engine.setSpawnPoint(data.spawn.x, data.spawn.y);
@@ -162,13 +200,29 @@ export class LevelManager {
     this.rebuildForest();
     this.rebuildBuilding();
     this.rebuildWorldModels();
+    this.rebuildWeather();
     this.rebuildColliders();
     this.rebuildEnemies();
+
+    // Push the theme (lights, void/bloom) onto the engine.
+    this.engine.applyTheme(this.theme);
 
     if (!this.announcedOpening && data.id === 'act1_harbor') {
       this.announcedOpening = true;
       this.engine.showToast('Something followed the boat ashore — push through the alley to the village!');
+    } else if (data.id === 'act2_wheatfield') {
+      this.engine.showToast('The great tree watches. The Ronin waits beneath it.');
     }
+  }
+
+  /** Active level id, read by the Settings Level Selector. */
+  public getActiveThemeId(): 'act1_harbor' | 'act2_wheatfield' {
+    return this.theme.id;
+  }
+
+  /** Live-update the wheat/grass foliage colours (Palette Studio). */
+  public setFoliageColors(base: THREE.Color, tip: THREE.Color): void {
+    this.grass?.setFoliageColors(base, tip);
   }
 
   // --- Editor-ready mutations -------------------------------------------------
@@ -245,11 +299,26 @@ export class LevelManager {
     if (this.water) {
       this.engine.removeLayer(this.water);
       this.water.dispose();
+      this.water = null;
+    }
+    if (!this.theme.hasWater) {
+      this.engine.waterObject = null;
+      return;
     }
     this.water = new WaterLayer(this.terrain, this.terrain.worldSize);
     this.engine.addLayer(this.water);
     this.engine.waterObject = this.water.object3D;
     this.water.setLights(this.collectWaterLights());
+  }
+
+  private rebuildWeather(): void {
+    if (this.weather) {
+      this.engine.removeLayer(this.weather);
+      this.weather.dispose();
+      this.weather = null;
+    }
+    this.weather = new WeatherLayer(this.engine.atlas, this.theme.weatherMode);
+    this.engine.addWeatherLayer(this.weather);
   }
 
   private rebuildGroundAndGrass(): void {
@@ -261,8 +330,21 @@ export class LevelManager {
       this.engine.removeLayer(this.grass);
       this.grass.dispose();
     }
+
+    const palette = this.theme.palette;
     this.ground = new GroundLayer(this.terrain, this.terrain.worldSize);
-    this.grass = new GrassLayer(this.terrain);
+    this.ground.setBaseTint(
+      new THREE.Color(this.theme.groundTint.r, this.theme.groundTint.g, this.theme.groundTint.b),
+    );
+    this.grass = new GrassLayer(this.terrain, {
+      foliageBase: hexToColor(palette.foliageBase),
+      foliageTip: hexToColor(palette.foliageTip),
+      heightScale: this.theme.foliageHeightScale,
+      swayAmp: this.theme.foliageSwayAmp,
+      clearingCenter: { x: 0, y: 0 },
+      clearingRadius: this.theme.clearingRadius,
+      warmWildflowers: this.theme.id === 'act2_wheatfield',
+    });
     this.engine.addLayer(this.ground);
     this.engine.addGrassLayer(this.grass);
     this.grass.setDarkSpots(this.collectGrassDarkSpots());
@@ -360,7 +442,11 @@ export class LevelManager {
   }
 
   private buildTreePlacements(): TreePlacement[] {
-    const procedural = generateRiversideForest(this.terrain, this.data.forestSeed);
+    // Level 2 is an endless wheatfield with no perimeter forest ring.
+    const procedural =
+      this.theme.id === 'act2_wheatfield'
+        ? []
+        : generateRiversideForest(this.terrain, this.data.forestSeed);
     const manual: TreePlacement[] = [];
     for (const e of this.data.entities) {
       if (e.kind !== 'tree') continue;

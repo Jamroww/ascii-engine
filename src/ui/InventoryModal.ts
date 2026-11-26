@@ -1,5 +1,6 @@
 import type { InventorySystem } from '../core/InventorySystem';
 import type { ProgressionSystem, QuestStage } from '../core/ProgressionSystem';
+import type { PaletteChannel, PaletteConfig } from '../core/LevelTheme';
 import { getItem } from '../data/items';
 import type { EquippableItem } from '../data/items';
 
@@ -50,10 +51,81 @@ export interface CameraLeanControls {
   setCameraLeanEnabled: (enabled: boolean) => void;
 }
 
+/** Level selection + palette hooks wired by the Engine. */
+export interface SettingsControls {
+  getActiveLevelId: () => 'act1_harbor' | 'act2_wheatfield';
+  loadLevel: (id: 'act1_harbor' | 'act2_wheatfield') => void;
+  getPalette: () => PaletteConfig;
+  setPaletteChannel: (channel: PaletteChannel, hex: string) => void;
+  resetPalette: () => void;
+}
+
+// --- HSV colour helpers ------------------------------------------------------
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const num = parseInt(h, 16);
+  return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const to = (n: number): string => clamp(Math.round(n), 0, 255).toString(16).padStart(2, '0');
+  return `#${to(r)}${to(g)}${to(b)}`;
+}
+
+function rgbToHsv(r: number, g: number, b: number): { h: number; s: number; v: number } {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const d = max - min;
+  let h = 0;
+  if (d !== 0) {
+    if (max === rn) h = 60 * (((gn - bn) / d) % 6);
+    else if (max === gn) h = 60 * ((bn - rn) / d + 2);
+    else h = 60 * ((rn - gn) / d + 4);
+  }
+  if (h < 0) h += 360;
+  const s = max === 0 ? 0 : d / max;
+  return { h, s, v: max };
+}
+
+function hsvToRgb(h: number, s: number, v: number): { r: number; g: number; b: number } {
+  const c = v * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = v - c;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (h < 60) { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else { r = c; b = x; }
+  return { r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255 };
+}
+
+const PALETTE_CHANNELS: Array<{ key: PaletteChannel; label: string }> = [
+  { key: 'foliageBase', label: 'Foliage Base' },
+  { key: 'foliageTip', label: 'Foliage Tip' },
+  { key: 'sunColor', label: 'Sun/Moon' },
+  { key: 'skyFillColor', label: 'Sky Fill' },
+  { key: 'groundColor', label: 'Ground' },
+  { key: 'asciiVoidColor', label: 'ASCII Void' },
+  { key: 'bloomTint', label: 'Bloom Tint' },
+];
+
 /**
  * Paused Gear & Quests overlay, toggled with I / Tab / Esc and closed with Esc.
- * It reads live state straight from the InventorySystem + ProgressionSystem and
- * re-renders on equip, so the engine only owns the open/close input routing.
+ * The Settings tab adds a Level Selector, the camera-lean toggle, and a live HSV
+ * colour wheel / palette studio that edits the active level's theme in real time.
  */
 export class InventoryModal {
   public readonly element: HTMLDivElement;
@@ -61,6 +133,7 @@ export class InventoryModal {
   private readonly inventory: InventorySystem;
   private readonly progression: ProgressionSystem;
   private readonly cameraLean: CameraLeanControls;
+  private readonly settings: SettingsControls;
   private readonly bodyEl: HTMLDivElement;
   private readonly gearTabEl: HTMLButtonElement;
   private readonly questTabEl: HTMLButtonElement;
@@ -69,15 +142,23 @@ export class InventoryModal {
   private active = false;
   private tab: 'gear' | 'quests' | 'settings' = 'gear';
 
+  // Palette studio state (re-initialised on each channel switch).
+  private paletteChannel: PaletteChannel = 'foliageBase';
+  private paletteH = 0;
+  private paletteS = 0;
+  private paletteV = 1;
+
   constructor(
     container: HTMLElement,
     inventory: InventorySystem,
     progression: ProgressionSystem,
     cameraLean: CameraLeanControls,
+    settings: SettingsControls,
   ) {
     this.inventory = inventory;
     this.progression = progression;
     this.cameraLean = cameraLean;
+    this.settings = settings;
 
     this.element = document.createElement('div');
     this.element.className = 'inventory-modal';
@@ -123,6 +204,33 @@ export class InventoryModal {
         return;
       }
 
+      const levelBtn = target.closest('[data-level]') as HTMLElement | null;
+      if (levelBtn) {
+        const id = levelBtn.dataset.level as 'act1_harbor' | 'act2_wheatfield';
+        this.settings.loadLevel(id);
+        return;
+      }
+
+      const channel = target.closest('[data-channel]') as HTMLElement | null;
+      if (channel && channel.dataset.channel) {
+        this.paletteChannel = channel.dataset.channel as PaletteChannel;
+        this.render();
+        return;
+      }
+
+      const reset = target.closest('[data-reset-palette]') as HTMLElement | null;
+      if (reset) {
+        this.settings.resetPalette();
+        this.render();
+        return;
+      }
+
+      const copy = target.closest('[data-copy-palette]') as HTMLElement | null;
+      if (copy) {
+        this.copyPalette(copy as HTMLElement);
+        return;
+      }
+
       const item = target.closest('[data-equip]') as HTMLElement | null;
       if (!item || !item.dataset.equip) return;
       this.inventory.equip(item.dataset.equip);
@@ -160,6 +268,7 @@ export class InventoryModal {
       this.bodyEl.innerHTML = this.renderQuests();
     } else {
       this.bodyEl.innerHTML = this.renderSettings();
+      this.bindSettingsInteractions();
     }
   }
 
@@ -242,17 +351,186 @@ export class InventoryModal {
   private renderSettings(): string {
     const enabled = this.cameraLean.getCameraLeanEnabled();
     const state = enabled ? 'ON' : 'OFF';
+    const activeLevel = this.settings.getActiveLevelId();
+
+    const channelsHtml = PALETTE_CHANNELS.map(
+      (c) =>
+        `<button class="inventory-modal__channel ${c.key === this.paletteChannel ? 'is-active' : ''}" data-channel="${c.key}">${c.label}</button>`
+    ).join('');
+
     return `
       <div class="inventory-modal__settings">
         <div class="inventory-modal__slot-label">SETTINGS</div>
+
+        <div class="inventory-modal__slot-label">LEVEL</div>
+        <div class="inventory-modal__level-row">
+          <button class="inventory-modal__level ${activeLevel === 'act1_harbor' ? 'is-active' : ''}" data-level="act1_harbor">[1] Harbor Village (Night)</button>
+          <button class="inventory-modal__level ${activeLevel === 'act2_wheatfield' ? 'is-active' : ''}" data-level="act2_wheatfield">[2] Sunset Wheatfield (The Ronin)</button>
+        </div>
+
+        <div class="inventory-modal__slot-label">CAMERA</div>
         <button class="inventory-modal__toggle" data-toggle-camera-lean type="button">
           <span class="inventory-modal__toggle-label">Camera Lean (A/D)</span>
           <span class="inventory-modal__toggle-state ${enabled ? 'is-on' : 'is-off'}">${state}</span>
         </button>
-        <p class="inventory-modal__settings-note">
-          Sways the camera into strafing movement. Off keeps the view rock-steady.
-        </p>
+
+        <div class="inventory-modal__slot-label">PALETTE STUDIO</div>
+        <div class="inventory-modal__palette">
+          <div class="inventory-modal__channels">${channelsHtml}</div>
+          <div class="inventory-modal__wheel-row">
+            <canvas class="inventory-modal__wheel" width="140" height="140"></canvas>
+            <div class="inventory-modal__value-col">
+              <span class="inventory-modal__value-label">VALUE</span>
+              <input class="inventory-modal__value" type="range" min="0" max="1" step="0.01" />
+            </div>
+          </div>
+          <div class="inventory-modal__hex-row">
+            <span class="inventory-modal__hex-label">HEX</span>
+            <input class="inventory-modal__hex" type="text" maxlength="7" spellcheck="false" />
+          </div>
+          <div class="inventory-modal__palette-actions">
+            <button class="inventory-modal__action" data-reset-palette type="button">Reset Defaults</button>
+            <button class="inventory-modal__action" data-copy-palette type="button">Copy Palette</button>
+          </div>
+        </div>
       </div>
     `;
+  }
+
+  /** Wire the wheel / slider / hex input after the settings body is rendered. */
+  private bindSettingsInteractions(): void {
+    const canvas = this.bodyEl.querySelector('.inventory-modal__wheel') as HTMLCanvasElement | null;
+    const slider = this.bodyEl.querySelector('.inventory-modal__value') as HTMLInputElement | null;
+    const hexInput = this.bodyEl.querySelector('.inventory-modal__hex') as HTMLInputElement | null;
+    if (!canvas || !slider || !hexInput) return;
+
+    const current = this.settings.getPalette()[this.paletteChannel];
+    const currentRgb = hexToRgb(current);
+    const { h, s, v } = rgbToHsv(currentRgb.r, currentRgb.g, currentRgb.b);
+    this.paletteH = h;
+    this.paletteS = s;
+    this.paletteV = v;
+    slider.value = String(v);
+    hexInput.value = current;
+
+    this.drawWheel(canvas);
+
+    let dragging = false;
+    const apply = (hue: number, sat: number): void => {
+      const { r, g, b } = hsvToRgb(hue, sat, this.paletteV);
+      const hex = rgbToHex(r, g, b);
+      this.paletteH = hue;
+      this.paletteS = sat;
+      this.settings.setPaletteChannel(this.paletteChannel, hex);
+      hexInput.value = hex;
+      this.drawWheel(canvas);
+    };
+
+    const updateFromPointer = (e: PointerEvent): void => {
+      const rect = canvas.getBoundingClientRect();
+      const radius = rect.width / 2;
+      const dx = e.clientX - (rect.left + radius);
+      const dy = e.clientY - (rect.top + radius);
+      const sat = clamp(Math.hypot(dx, dy) / radius, 0, 1);
+      const hue = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
+      apply(hue, sat);
+    };
+
+    canvas.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      canvas.setPointerCapture(e.pointerId);
+      updateFromPointer(e);
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (dragging) updateFromPointer(e);
+    });
+    canvas.addEventListener('pointerup', () => {
+      dragging = false;
+    });
+
+    slider.addEventListener('input', () => {
+      this.paletteV = parseFloat(slider.value);
+      apply(this.paletteH, this.paletteS);
+    });
+
+    hexInput.addEventListener('change', () => {
+      const value = hexInput.value.trim();
+      if (!/^#?[0-9a-fA-F]{6}$/.test(value)) {
+        const fallback = hsvToRgb(this.paletteH, this.paletteS, this.paletteV);
+        hexInput.value = rgbToHex(fallback.r, fallback.g, fallback.b);
+        return;
+      }
+      const hex = value.startsWith('#') ? value : `#${value}`;
+      const { r, g, b } = hexToRgb(hex);
+      const hsv = rgbToHsv(r, g, b);
+      this.paletteH = hsv.h;
+      this.paletteS = hsv.s;
+      this.paletteV = hsv.v;
+      slider.value = String(hsv.v);
+      this.settings.setPaletteChannel(this.paletteChannel, hex.toLowerCase());
+      hexInput.value = hex.toLowerCase();
+      this.drawWheel(canvas);
+    });
+  }
+
+  private drawWheel(canvas: HTMLCanvasElement): void {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const size = canvas.width;
+    const image = ctx.createImageData(size, size);
+    const data = image.data;
+    const center = size / 2;
+    const radius = center - 2;
+
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const dx = x - center;
+        const dy = y - center;
+        const dist = Math.hypot(dx, dy);
+        const idx = (y * size + x) * 4;
+        if (dist > radius) {
+          data[idx + 3] = 0;
+          continue;
+        }
+        const sat = dist / radius;
+        const hue = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
+        const { r, g, b } = hsvToRgb(hue, sat, this.paletteV);
+        data[idx] = Math.round(r);
+        data[idx + 1] = Math.round(g);
+        data[idx + 2] = Math.round(b);
+        data[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+
+    const cx = center + Math.cos((this.paletteH * Math.PI) / 180) * this.paletteS * radius;
+    const cy = center + Math.sin((this.paletteH * Math.PI) / 180) * this.paletteS * radius;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx - 6, cy);
+    ctx.lineTo(cx + 6, cy);
+    ctx.moveTo(cx, cy - 6);
+    ctx.lineTo(cx, cy + 6);
+    ctx.stroke();
+  }
+
+  private copyPalette(button: HTMLElement): void {
+    const json = JSON.stringify(this.settings.getPalette(), null, 2);
+    const done = (): void => {
+      const original = button.textContent ?? 'Copy Palette';
+      button.textContent = 'Copied!';
+      window.setTimeout(() => {
+        button.textContent = original;
+      }, 900);
+    };
+    try {
+      void navigator.clipboard.writeText(json).then(done, done);
+    } catch {
+      done();
+    }
   }
 }

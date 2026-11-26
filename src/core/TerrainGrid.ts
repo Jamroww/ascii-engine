@@ -313,6 +313,44 @@ export class TerrainGrid {
     this.texture.needsUpdate = true;
   }
 
+  /**
+   * Bake the Act 2 golden sunset wheatfield: an 80x80 dry rolling plain with no
+   * river, a circular beaten-earth dueling clearing around (0,0), and a dirt
+   * approach path coming north from the south spawn.
+   */
+  public static bakeAct2Wheatfield(resolution = 256, worldSize = 80): TerrainGrid {
+    const grid = new TerrainGrid(resolution, worldSize);
+    const half = worldSize / 2;
+    const CLEARING_RADIUS = 10.5;
+
+    for (let iy = 0; iy < resolution; iy++) {
+      const wy = ((iy + 0.5) / resolution) * worldSize - half;
+      for (let ix = 0; ix < resolution; ix++) {
+        const wx = ((ix + 0.5) / resolution) * worldSize - half;
+
+        // R — dry land everywhere (no river / water on the wheatfield).
+        grid.data[grid.index(ix, iy, 0)] = 255;
+
+        // G — clean earth (no blight).
+        grid.data[grid.index(ix, iy, 1)] = 0;
+
+        // B — circular dueling clearing + the southern dirt approach path.
+        const clearingDist = Math.hypot(wx, wy);
+        const clearing = 1 - smoothstep(CLEARING_RADIUS - 1.5, CLEARING_RADIUS + 1.5, clearingDist);
+        const onPathY = wy > -25 && wy < -8;
+        const path = onPathY ? 1 - smoothstep(1.1, 2.4, Math.abs(wx)) : 0;
+        const mask = Math.max(clearing, path);
+        grid.data[grid.index(ix, iy, 2)] = Math.round(clamp(mask, 0, 1) * 255);
+
+        // A — no terrain modifier.
+        grid.data[grid.index(ix, iy, 3)] = 0;
+      }
+    }
+
+    grid.texture.needsUpdate = true;
+    return grid;
+  }
+
   public toBase64(): string {
     const bytes = this.data;
     let binary = '';

@@ -1,7 +1,6 @@
 import './style.css';
 import { Engine } from './core/Engine';
 import { LevelManager } from './core/LevelManager';
-import { WeatherLayer } from './rendering/WeatherLayer';
 
 const app = document.querySelector<HTMLDivElement>('#app');
 if (!app) {
@@ -14,8 +13,6 @@ const level = new LevelManager(engine);
 engine.setLevelManager(level);
 
 level.loadLevel(LevelManager.createDefaultVillageLevel());
-
-engine.addWeatherLayer(new WeatherLayer(engine.atlas));
 
 engine.start();
 

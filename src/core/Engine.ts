@@ -17,7 +17,15 @@ import { InventoryModal } from '../ui/InventoryModal';
 import { InventorySystem } from './InventorySystem';
 import { WORLD_BOUNDS, PLAYER_RADIUS } from './world';
 import type { TerrainGrid } from './TerrainGrid';
-import type { LevelManager } from './LevelManager';
+import { LevelManager } from './LevelManager';
+import {
+  clonePalette,
+  getLevelTheme,
+  hexToColor,
+  type LevelTheme,
+  type PaletteConfig,
+  type PaletteChannel,
+} from './LevelTheme';
 import type { PlacedEntity } from '../data/levelTypes';
 
 const HITSTOP_DURATION = 0.028;
@@ -93,6 +101,11 @@ export class Engine {
   private readonly hemiLight: THREE.HemisphereLight;
   private readonly lanternLight: THREE.PointLight;
 
+  // Level theme + live palette (Level 1 midnight harbor vs Level 2 sunset field).
+  private activeTheme: LevelTheme = getLevelTheme('act1_harbor');
+  private activePalette: PaletteConfig = clonePalette(getLevelTheme('act1_harbor').palette);
+  private readonly sunOffset = new THREE.Vector3(-16, 28, 16);
+
   // Half-res transparent target capturing the mirrored player for the water
   // reflection (one lightweight draw call per frame).
   private readonly playerReflectionRT: THREE.WebGLRenderTarget;
@@ -133,6 +146,9 @@ export class Engine {
   private dialogueOpen = false;
   private inventoryOpen = false;
   private currentInteract: PlacedEntity | null = null;
+  private pendingRoninStart = false;
+  private roninInteract = false;
+  private roninFightActive = false;
 
   // Parry state + live aim direction (world space) for projectile deflects.
   private parryCooldown = 0;
@@ -234,10 +250,22 @@ export class Engine {
 
     this.hud = new Hud(container);
     this.dialogueBox = new DialogueBox(container);
-    this.inventoryModal = new InventoryModal(container, this.inventory, this.progression, {
-      getCameraLeanEnabled: () => this.cameraLeanEnabled,
-      setCameraLeanEnabled: (enabled) => this.setCameraLeanEnabled(enabled),
-    });
+    this.inventoryModal = new InventoryModal(
+      container,
+      this.inventory,
+      this.progression,
+      {
+        getCameraLeanEnabled: () => this.cameraLeanEnabled,
+        setCameraLeanEnabled: (enabled) => this.setCameraLeanEnabled(enabled),
+      },
+      {
+        getActiveLevelId: () => this.activeTheme.id,
+        loadLevel: (id) => this.loadLevel(id),
+        getPalette: () => this.activePalette,
+        setPaletteChannel: (channel, hex) => this.setPaletteChannel(channel, hex),
+        resetPalette: () => this.resetPalette(),
+      },
+    );
 
     // The sidebar [I] button toggles the gear & quest screen.
     this.hud.setInventoryHandler(() => this.toggleInventory());
@@ -282,6 +310,61 @@ export class Engine {
 
   public setLevelManager(levelManager: LevelManager): void {
     this.levelManager = levelManager;
+  }
+
+  /** Load a level by id (used by the Settings Level Selector). */
+  public loadLevel(id: 'act1_harbor' | 'act2_wheatfield'): void {
+    const data =
+      id === 'act2_wheatfield'
+        ? LevelManager.createSunsetWheatfieldLevel()
+        : LevelManager.createDefaultVillageLevel();
+    this.pendingRoninStart = false;
+    this.roninInteract = false;
+    this.roninFightActive = false;
+    this.levelManager?.loadLevel(data);
+    this.closeInventory();
+    this.drainGameplayInput();
+  }
+
+  /** Apply a level's theme to the lighting rig + post-process (called on load). */
+  public applyTheme(theme: LevelTheme): void {
+    this.activeTheme = theme;
+    this.activePalette = clonePalette(theme.palette);
+    this.sunOffset.set(theme.sunPosition.x, theme.sunPosition.y, theme.sunPosition.z);
+    this.moonLight.intensity = theme.sunIntensity;
+    this.hemiLight.intensity = theme.skyFillIntensity;
+    this.syncPalette();
+  }
+
+  /** Live-edit one palette channel (HSV colour wheel / Palette Studio). */
+  public setPaletteChannel(channel: PaletteChannel, hex: string): void {
+    this.activePalette[channel] = hex;
+    this.syncPalette();
+  }
+
+  /** Restore the active level's preset palette. */
+  public resetPalette(): void {
+    this.activePalette = clonePalette(this.activeTheme.palette);
+    this.syncPalette();
+  }
+
+  /** Push the live palette into lights, post-process and foliage. */
+  private syncPalette(): void {
+    const p = this.activePalette;
+    this.moonLight.color.set(p.sunColor);
+    this.hemiLight.color.set(p.skyFillColor);
+    this.hemiLight.groundColor.set(p.groundColor);
+    this.postProcess.setBgColor(hexToColor(p.asciiVoidColor));
+    this.postProcess.setBloomTint(hexToColor(p.bloomTint));
+    this.levelManager?.setFoliageColors(hexToColor(p.foliageBase), hexToColor(p.foliageTip));
+  }
+
+  /** Close the inventory modal (used by the level selector). */
+  private closeInventory(): void {
+    if (this.inventoryOpen) {
+      this.inventoryOpen = false;
+      this.inventoryModal.close();
+    }
   }
 
   public setPlayerPosition(x: number, y: number): void {
@@ -729,6 +812,10 @@ export class Engine {
     if (!this.dialogueBox.isOpen) {
       this.dialogueOpen = false;
       this.drainGameplayInput();
+      if (this.pendingRoninStart) {
+        this.pendingRoninStart = false;
+        this.startRoninFight();
+      }
     }
   }
 
@@ -855,9 +942,10 @@ export class Engine {
 
     this.collision.resolve(this.playerPos, PLAYER_RADIUS);
 
+    const worldRadius = this.activeTheme.id === 'act2_wheatfield' ? 36 : WORLD_BOUNDS;
     const distFromCenter = this.playerPos.length();
-    if (distFromCenter > WORLD_BOUNDS) {
-      this.playerPos.multiplyScalar(WORLD_BOUNDS / distFromCenter);
+    if (distFromCenter > worldRadius) {
+      this.playerPos.multiplyScalar(worldRadius / distFromCenter);
     }
 
     this.updateFollowCamera(dt, state.moveX);
@@ -889,6 +977,18 @@ export class Engine {
     this.enemies.update(dt);
     this.parryActiveTimer = Math.max(0, this.parryActiveTimer - dt);
 
+    // The Ronin defeat beat (slow-mo + victory toast).
+    if (
+      this.activeTheme.id === 'act2_wheatfield' &&
+      this.roninFightActive &&
+      !this.enemies.hasAliveGroup('boss')
+    ) {
+      this.roninFightActive = false;
+      this.triggerHitstop(0.25);
+      this.hud.showToast('The Ronin lowers his blade.');
+      this.hud.flashInventoryButton();
+    }
+
     // Register death once, then hand off to the respawn pause.
     if (this.stats.isDead) {
       this.respawnPending = true;
@@ -900,9 +1000,16 @@ export class Engine {
 
     this.updateInteractPrompt();
     const boss = this.enemies.getBoss();
-    const bossVisible =
-      !!boss &&
-      Math.hypot(boss.x - this.playerPos.x, boss.y - this.playerPos.y) < BOSS_AGGRO_RANGE;
+    const bossIsRonin = boss?.assetId === 'the_ronin';
+    const bossInRange =
+      !!boss && Math.hypot(boss.x - this.playerPos.x, boss.y - this.playerPos.y) < BOSS_AGGRO_RANGE;
+    const bossVisible = bossIsRonin ? bossInRange && boss.roninPhase !== 0 : bossInRange;
+    const bossName = bossIsRonin ? 'THE RONIN' : 'CASTLE WARDEN';
+    const bossSubtitle = bossIsRonin
+      ? boss.roninPhase === 2
+        ? '— Unsheathed'
+        : '— Wandering Blade'
+      : '— Blight Sentinel';
 
     this.hud.update({
       health: this.stats.health,
@@ -926,8 +1033,8 @@ export class Engine {
       parryCooldownFraction: this.parryCooldown > 0 ? this.parryCooldown / PARRY_COOLDOWN : 0,
       parryCooldownSeconds: this.parryCooldown,
       bossVisible,
-      bossName: 'CASTLE WARDEN',
-      bossSubtitle: '— Blight Sentinel',
+      bossName,
+      bossSubtitle,
       bossHpFraction: boss ? boss.hp / boss.maxHp : 0,
     });
     this.hud.drawPortrait(this.player3D.getPortraitPixels());
@@ -982,7 +1089,11 @@ export class Engine {
     const texelSize = (SHADOW_FRUSTUM_HALF * 2) / SHADOW_MAP_SIZE;
     const shadowX = Math.round(this.playerPos.x / texelSize) * texelSize;
     const shadowZ = Math.round(-this.playerPos.y / texelSize) * texelSize;
-    this.moonLight.position.set(shadowX - 16, 28, shadowZ + 16);
+    this.moonLight.position.set(
+      shadowX + this.sunOffset.x,
+      this.sunOffset.y,
+      shadowZ + this.sunOffset.z,
+    );
     this.moonLight.target.position.set(shadowX, 0, shadowZ);
     this.moonLight.target.updateMatrixWorld(true);
 
@@ -1049,6 +1160,9 @@ export class Engine {
 
   /** Drive the Act 1 quest stage transitions (alley -> survivors -> castle). */
   private updateQuest(): void {
+    // The Act 1 quest is harbor-only; Level 2 has no quest stages.
+    if (this.activeTheme.id !== 'act1_harbor') return;
+
     const stage = this.progression.questStage;
 
     if (stage === 'alley_ambush') {
@@ -1088,6 +1202,22 @@ export class Engine {
       }
     }
 
+    // The Ronin (pre-fight) can be spoken to before the duel starts.
+    const ronin = this.enemies.getBoss();
+    const roninNear =
+      !!ronin &&
+      ronin.assetId === 'the_ronin' &&
+      ronin.roninPhase === 0 &&
+      Math.hypot(ronin.x - this.playerPos.x, ronin.y - this.playerPos.y) <= INTERACT_RANGE;
+    if (roninNear) {
+      this.currentInteract = null;
+      this.roninInteract = true;
+      lm.setInteractableHighlight(null);
+      this.hud.setInteractPrompt('[E] Speak — The Ronin');
+      return;
+    }
+    this.roninInteract = false;
+
     this.currentInteract = nearest;
     lm.setInteractableHighlight(nearest ? nearest.id : null);
     if (nearest) {
@@ -1113,6 +1243,11 @@ export class Engine {
   }
 
   private tryInteract(): void {
+    if (this.roninInteract) {
+      this.openRoninDialogue();
+      return;
+    }
+
     const lm = this.levelManager;
     if (!lm || !this.currentInteract) return;
     const e = this.currentInteract;
@@ -1153,10 +1288,43 @@ export class Engine {
     }
   }
 
+  /** Open The Ronin's pre-fight dialogue; the duel begins when it closes. */
+  private openRoninDialogue(): void {
+    const data = this.progression.getDialogueLines('npc_ronin');
+    this.dialogueBox.open(data);
+    this.dialogueOpen = true;
+    this.pendingRoninStart = true;
+  }
+
+  /** Gale pushback + phase-one transition for The Ronin after dialogue. */
+  private startRoninFight(): void {
+    const ronin = this.enemies.getBoss();
+    if (!ronin) return;
+
+    this.enemies.beginRoninFight();
+    this.roninFightActive = true;
+
+    // Strong decaying knockback shoves the player ~5.5 units back.
+    const dx = this.playerPos.x - ronin.x;
+    const dy = this.playerPos.y - ronin.y;
+    const d = Math.hypot(dx, dy) || 1;
+    this.applyPlayerKnockback((dx / d) * 55, (dy / d) * 55);
+
+    // Golden-white shockwave ring + camera nudge + clash sound (no damage).
+    this.enemies.spawnShockwave(ronin.x, ronin.y, 1.0, 0.95, 0.72);
+    this.triggerCameraPunch(dx / d, dy / d, 0.5);
+    this.triggerShake(0.3);
+    this.playParryClang();
+    this.hud.showToast('The Ronin accepts your challenge.');
+  }
+
   private doRespawn(): void {
     this.respawnPending = false;
     this.stats.reset();
     this.enemies.reset();
+    this.roninFightActive = false;
+    this.roninInteract = false;
+    this.pendingRoninStart = false;
     this.playerPos.set(this.spawnPoint.x, this.spawnPoint.y);
     this.knockbackX = 0;
     this.knockbackY = 0;

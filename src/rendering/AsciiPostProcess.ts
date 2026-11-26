@@ -28,6 +28,7 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
   uniform float uGlyphCount;
   uniform float uBurstGlow;
   uniform float uParryFlash;
+  uniform vec3 uBgColor;
 
   const vec3 LUMA = vec3(0.299, 0.587, 0.114);
 
@@ -68,9 +69,11 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
     float L = dot(tn, LUMA);
 
     // Pure #000000 floor for pitch-black ground/bank undercuts, while letting
-    // moonlit buildings, trees, and midnight water remain clearly legible.
+    // moonlit buildings, trees, and midnight water remain clearly legible. The
+    // floor now uses uBgColor so a sunset wheatfield can keep a warm charcoal
+    // void instead of hard black (Level 1 keeps uBgColor = pure black).
     if (L < 0.08) {
-      gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+      gl_FragColor = vec4(uBgColor, 1.0);
       return;
     }
 
@@ -99,7 +102,11 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
     // Crisp bright-white parry flash.
     fgColor += vec3(0.9, 0.94, 1.0) * uParryFlash;
 
-    gl_FragColor = vec4(fgColor * glyphAlpha, 1.0);
+    // Composite the glyph over the void colour so the empty space *between*
+    // glyphs matches the below-black-point floor (black for Level 1, warm
+    // charcoal for the wheatfield).
+    vec3 outCol = mix(uBgColor, fgColor, glyphAlpha);
+    gl_FragColor = vec4(outCol, 1.0);
   }
 `;
 
@@ -111,6 +118,7 @@ const BRIGHT_PASS_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uTex;
   uniform float uThreshold;
   uniform float uKnee;
+  uniform vec3 uBloomTint;
 
   varying vec2 vUv;
 
@@ -119,9 +127,10 @@ const BRIGHT_PASS_FRAGMENT_SHADER = /* glsl */ `
   void main() {
     vec3 col = texture2D(uTex, vUv).rgb;
     float luma = dot(col, LUMA);
-    // Soft-knee bright pass keeps bright rims glowing without hard edges.
+    // Soft-knee bright pass keeps bright rims glowing without hard edges, then
+    // tints the bloom (near-white for Level 1, warm gold for the sunset field).
     float w = smoothstep(uThreshold - uKnee, uThreshold + uKnee, luma);
-    gl_FragColor = vec4(col * w, 1.0);
+    gl_FragColor = vec4(col * w * uBloomTint, 1.0);
   }
 `;
 
@@ -194,6 +203,7 @@ export class AsciiPostProcess {
   private readonly depthOnlyMaterial: THREE.MeshBasicMaterial;
   private readonly originVec = new THREE.Vector3();
   private readonly drawSize = new THREE.Vector2();
+  private readonly skipDepthMeshes: THREE.Object3D[] = [];
 
   constructor(atlas: GlyphAtlas) {
     this.sceneRT = new THREE.WebGLRenderTarget(1, 1, {
@@ -240,6 +250,7 @@ export class AsciiPostProcess {
         uGlyphCount: { value: atlas.count },
         uBurstGlow: { value: 0 },
         uParryFlash: { value: 0 },
+        uBgColor: { value: new THREE.Color(0, 0, 0) },
       },
       depthTest: false,
       depthWrite: false,
@@ -256,6 +267,7 @@ export class AsciiPostProcess {
         uTex: { value: this.compositeRT.texture },
         uThreshold: { value: 0.48 },
         uKnee: { value: 0.12 },
+        uBloomTint: { value: new THREE.Color(1, 1, 1) },
       },
       depthTest: false,
       depthWrite: false,
@@ -334,6 +346,16 @@ export class AsciiPostProcess {
     this.material.uniforms.uParryFlash.value = amount;
   }
 
+  /** Void colour shown below the black point and between glyphs. */
+  public setBgColor(color: THREE.Color): void {
+    (this.material.uniforms.uBgColor.value as THREE.Color).copy(color);
+  }
+
+  /** Tint applied to the quarter-res bloom pass. */
+  public setBloomTint(color: THREE.Color): void {
+    (this.brightPassMaterial.uniforms.uBloomTint.value as THREE.Color).copy(color);
+  }
+
   private updateGridOffset(
     renderer: THREE.WebGLRenderer,
     worldCamera: THREE.OrthographicCamera,
@@ -359,6 +381,16 @@ export class AsciiPostProcess {
       Math.floor(oy),
     );
     (this.material.uniforms.uSampleOffset.value as THREE.Vector2).set(ox, oy);
+  }
+
+  /** Gather currently-visible meshes flagged to skip the depth-only prepass. */
+  private collectSkipDepthPrepass(worldScene: THREE.Scene): void {
+    this.skipDepthMeshes.length = 0;
+    worldScene.traverse((obj) => {
+      if (obj.visible && obj.userData.skipDepthPrepass === true) {
+        this.skipDepthMeshes.push(obj);
+      }
+    });
   }
 
   public render(
@@ -388,10 +420,15 @@ export class AsciiPostProcess {
     renderer.render(this.postScene, this.postCamera);
 
     // 3. Depth-only prepass into compositeRT's depth so grass/weather occlude
-    //    correctly against world geometry.
+    //    correctly against world geometry. Meshes flagged `skipDepthPrepass`
+    //    (the ghostly see-through tree branches) are hidden for this pass so
+    //    their depth never occludes the wheat/duel beneath the canopy.
     const prevOverride = worldScene.overrideMaterial;
     const prevWaterVisible = waterObject ? waterObject.visible : true;
     const prevBackground = worldScene.background;
+
+    this.collectSkipDepthPrepass(worldScene);
+    for (const skip of this.skipDepthMeshes) skip.visible = false;
 
     renderer.clearDepth();
     if (waterObject) waterObject.visible = false;
@@ -401,6 +438,9 @@ export class AsciiPostProcess {
     worldScene.overrideMaterial = prevOverride;
     worldScene.background = prevBackground;
     if (waterObject) waterObject.visible = prevWaterVisible;
+
+    for (const skip of this.skipDepthMeshes) skip.visible = true;
+    this.skipDepthMeshes.length = 0;
 
     // 4. Depth-tested grass, weather and the editor overlay -> compositeRT.
     if (grassScene) renderer.render(grassScene, worldCamera);

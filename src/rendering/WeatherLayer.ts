@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FrameContext, IRenderLayer } from '../core/types';
+import type { WeatherMode } from '../core/LevelTheme';
 import { GlyphAtlas } from './GlyphAtlas';
 
 const WEATHER_VERTEX_SHADER = /* glsl */ `
@@ -82,10 +83,11 @@ export class WeatherLayer implements IRenderLayer {
   public readonly object3D: THREE.InstancedMesh;
   private readonly material: THREE.ShaderMaterial;
 
-  constructor(atlas: GlyphAtlas, rainCount = 760, sporeCount = 170, petalCount = 85) {
+  constructor(atlas: GlyphAtlas, mode: WeatherMode = 'rain', rainCount = 760, sporeCount = 170, petalCount = 85) {
     const total = rainCount + sporeCount + petalCount;
     const boundsX = 48;
     const boundsY = 48;
+    const petals = mode === 'petals';
 
     const geometry = new THREE.PlaneGeometry(0.42, 0.72);
     const offsets = new Float32Array(total * 3);
@@ -107,25 +109,25 @@ export class WeatherLayer implements IRenderLayer {
 
       if (i < rainCount) {
         types[i] = 0.0;
-        speeds[i] = 14.0 + Math.random() * 8.0;
+        speeds[i] = petals ? 2.0 + Math.random() * 3.0 : 14.0 + Math.random() * 8.0;
         glyphIndices[i] = rainIdx;
-        colors[i * 3 + 0] = 0.55;
-        colors[i * 3 + 1] = 0.68;
-        colors[i * 3 + 2] = 0.82;
+        colors[i * 3 + 0] = petals ? 0.95 : 0.55;
+        colors[i * 3 + 1] = petals ? 0.72 : 0.68;
+        colors[i * 3 + 2] = petals ? 0.42 : 0.82;
       } else if (i < rainCount + sporeCount) {
         types[i] = 1.0;
         speeds[i] = 1.0;
         glyphIndices[i] = sporeIdx;
-        colors[i * 3 + 0] = 0.5;
-        colors[i * 3 + 1] = 0.6;
-        colors[i * 3 + 2] = 0.3;
+        colors[i * 3 + 0] = petals ? 0.88 : 0.5;
+        colors[i * 3 + 1] = petals ? 0.44 : 0.6;
+        colors[i * 3 + 2] = petals ? 0.2 : 0.3;
       } else {
         types[i] = 2.0;
         speeds[i] = 0.6 + Math.random() * 0.8;
         glyphIndices[i] = petalIdx;
-        colors[i * 3 + 0] = 0.5;
-        colors[i * 3 + 1] = 0.28;
-        colors[i * 3 + 2] = 0.26;
+        colors[i * 3 + 0] = petals ? 0.78 : 0.5;
+        colors[i * 3 + 1] = petals ? 0.26 : 0.28;
+        colors[i * 3 + 2] = petals ? 0.2 : 0.26;
       }
     }
 

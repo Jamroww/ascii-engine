@@ -3,15 +3,17 @@ import type { FrameContext, IRenderLayer } from '../core/types';
 import { MELEE_TELEGRAPH_GLINT_WINDOW } from '../core/EnemyManager';
 import type { Enemy, EnemyManager } from '../core/EnemyManager';
 import { ENEMY_MODEL_FACTORIES, type EnemyAssetId } from './Enemies';
+import type { RoninRig } from './Lvl2';
 import { disposeModelTree, setCastShadow } from './modelUtils';
 
 const HIT_FLASH_DURATION = 0.12;
 const CLASH_SPARK_DURATION = 0.22;
 
 interface EnemyMaterialRef {
-  mat: THREE.MeshStandardMaterial;
+  mat: THREE.MeshStandardMaterial | THREE.MeshPhongMaterial;
   baseEmissive: THREE.Color;
   baseIntensity: number;
+  isBlade?: boolean;
 }
 
 interface EnemyModelEntry {
@@ -40,6 +42,7 @@ export class EnemyLayer implements IRenderLayer {
   private readonly friendlyProjectileMeshes: THREE.Mesh[] = [];
   private readonly ringGeometry = new THREE.RingGeometry(0.5, 0.6, 24);
   private readonly clashMeshes: THREE.Mesh[] = [];
+  private readonly shockwaveMeshes: THREE.Mesh[] = [];
 
   constructor(manager: EnemyManager) {
     this.manager = manager;
@@ -50,6 +53,7 @@ export class EnemyLayer implements IRenderLayer {
     this.updateProjectiles(ctx);
     this.updateFriendlyProjectiles(ctx);
     this.updateClashes();
+    this.updateShockwaves();
   }
 
   public dispose(): void {
@@ -69,6 +73,10 @@ export class EnemyLayer implements IRenderLayer {
       (mesh.material as THREE.Material).dispose();
     }
     this.clashMeshes.length = 0;
+    for (const mesh of this.shockwaveMeshes) {
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.shockwaveMeshes.length = 0;
     this.projectileGeometry.dispose();
     this.friendlyProjectileGeometry.dispose();
     this.ringGeometry.dispose();
@@ -159,7 +167,18 @@ export class EnemyLayer implements IRenderLayer {
       } else {
         mat.emissive.copy(ref.baseEmissive);
         mat.emissiveIntensity = ref.baseIntensity;
+        // The Ronin's blade gleams brighter as the fight deepens.
+        if (ref.isBlade && enemy.assetId === 'the_ronin') {
+          const glow = enemy.roninGlow ?? 0;
+          mat.emissive.setRGB(0.85, 0.92, 1.0);
+          mat.emissiveIntensity = 0.35 + glow * 2.1;
+        }
       }
+    }
+
+    // Articulated Ronin pose animation (idle / draw-coil / swing / stagger).
+    if (enemy.assetId === 'the_ronin') {
+      this.applyRoninRig(entry, enemy, ctx);
     }
 
     // Small expanding glint ring during the final coil moment.
@@ -203,13 +222,22 @@ export class EnemyLayer implements IRenderLayer {
       mesh.position.set(proj.x, 0.6, -proj.y);
 
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      const violet = i % 2 === 0;
-      mat.emissive.setRGB(violet ? 0.7 : 0.35, violet ? 0.4 : 0.95, violet ? 0.95 : 0.5);
       const pulse = 0.75 + 0.25 * Math.sin(ctx.elapsed * 18 + i * 1.7);
-      mat.emissiveIntensity = 2.0 * pulse;
+      const golden = proj.golden === true;
+      if (golden) {
+        // Ronin crescent wave: a wide flat golden slash.
+        mat.emissive.setRGB(1.0, 0.72, 0.2);
+        mat.emissiveIntensity = 2.6 * pulse;
+        const size = 1.1 + Math.sin(ctx.elapsed * 24 + i * 1.9) * 0.12;
+        mesh.scale.set(size * 1.5, size * 0.22, size * 1.5);
+      } else {
+        const violet = i % 2 === 0;
+        mat.emissive.setRGB(violet ? 0.7 : 0.35, violet ? 0.4 : 0.95, violet ? 0.95 : 0.5);
+        mat.emissiveIntensity = 2.0 * pulse;
 
-      const size = 0.72 + Math.sin(ctx.elapsed * 20 + i * 1.3) * 0.14;
-      mesh.scale.setScalar(size);
+        const size = 0.72 + Math.sin(ctx.elapsed * 20 + i * 1.3) * 0.14;
+        mesh.scale.setScalar(size);
+      }
     }
   }
 
@@ -271,10 +299,104 @@ export class EnemyLayer implements IRenderLayer {
     }
   }
 
+  private updateShockwaves(): void {
+    const waves = this.manager.getShockwaves();
+
+    while (this.shockwaveMeshes.length < waves.length) {
+      this.shockwaveMeshes.push(this.createRingMesh());
+    }
+
+    for (let i = 0; i < this.shockwaveMeshes.length; i++) {
+      const mesh = this.shockwaveMeshes[i];
+      const wave = waves[i];
+      if (!wave) {
+        mesh.visible = false;
+        continue;
+      }
+      mesh.visible = true;
+      mesh.position.set(wave.x, 0.2, -wave.y);
+      const p = Math.min(1, wave.age / wave.life);
+      mesh.scale.setScalar(0.5 + p * 5.5);
+      const mat = mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = (1 - p) * 0.85;
+      mat.color.setRGB(wave.r, wave.g, wave.b);
+    }
+  }
+
   // --- Helpers ---------------------------------------------------------------
 
-  private createEntry(id: string, assetId: string): EnemyModelEntry {
-    const factory = ENEMY_MODEL_FACTORIES[assetId as EnemyAssetId];
+  /** Procedurally pose the Ronin's articulated rig from its current state. */
+  private applyRoninRig(entry: EnemyModelEntry, enemy: Enemy, ctx: FrameContext): void {
+    const rig = entry.model.userData.roninRig as RoninRig | undefined;
+    if (!rig) return;
+
+    const t = ctx.elapsed;
+    const move = enemy.roninMove ?? 'idle';
+    const state = enemy.state;
+
+    // Neutral idle stance, re-asserted every frame.
+    const breathe = Math.sin(t * 2.2) * 0.015;
+    rig.hips.position.y = 0.92 + breathe;
+    rig.torso.rotation.set(0, 0, 0);
+    rig.head.rotation.set(0, 0, 0);
+    rig.hat.rotation.set(0, 0, 0);
+    rig.leftArm.rotation.set(0, 0, 0.14);
+    rig.rightArm.rotation.set(0, 0, -0.14);
+    rig.leftElbow.rotation.set(0, 0, -0.35);
+    rig.rightElbow.rotation.set(0, 0, -0.35);
+    rig.leftLeg.rotation.set(0, 0, 0);
+    rig.rightLeg.rotation.set(0, 0, 0);
+    rig.leftKnee.rotation.set(0, 0, 0);
+    rig.rightKnee.rotation.set(0, 0, 0);
+    rig.weaponPivot.rotation.set(Math.PI, 0, 0);
+
+    if (enemy.staggerTimer > 0) {
+      // Stagger: recoil backward, arms thrown wide.
+      rig.torso.rotation.x = -0.24;
+      rig.leftArm.rotation.x = -1.25;
+      rig.rightArm.rotation.x = -1.25;
+      rig.leftArm.rotation.z = 0.35;
+      rig.rightArm.rotation.z = -0.35;
+      rig.hips.position.y = 0.88;
+      return;
+    }
+
+    if (state === 'telegraph') {
+      if (move === 'draw') {
+        // Iaijutsu draw-coil: deep crouch, hilt forward.
+        rig.hips.position.y = 0.74;
+        rig.torso.rotation.x = 0.34;
+        rig.rightArm.rotation.x = -0.55;
+        rig.rightArm.rotation.y = 0.35;
+        rig.weaponPivot.rotation.set(Math.PI, -0.55, 0.15);
+      } else if (move === 'wave') {
+        rig.hips.position.y = 0.84;
+        rig.torso.rotation.y = -0.4;
+        rig.rightArm.rotation.x = -0.85;
+        rig.rightArm.rotation.y = 0.5;
+        rig.weaponPivot.rotation.set(Math.PI, -0.7, 0);
+      } else {
+        // Shoulder draw-back for crescent / twin / combo / whirlwind.
+        rig.torso.rotation.y = -0.45;
+        rig.rightArm.rotation.y = -0.55;
+        rig.rightArm.rotation.x = -0.4;
+        rig.weaponPivot.rotation.set(Math.PI, -0.35, 0);
+      }
+      return;
+    }
+
+    if (state === 'attack') {
+      // Broad sweeping cut: swing the torso + sword across the body.
+      const swing = Math.sin(t * 18.0) * (move === 'whirlwind' ? 1.6 : 1.0);
+      rig.torso.rotation.y = move === 'whirlwind' ? Math.sin(t * 22.0) * Math.PI : swing;
+      rig.torso.rotation.x = move === 'draw' ? 0.25 : 0.1;
+      rig.rightArm.rotation.y = swing;
+      rig.rightArm.rotation.x = -0.5 + Math.abs(Math.sin(t * 18.0)) * 0.4;
+      rig.weaponPivot.rotation.set(Math.PI, swing * 0.6, 0);
+    }
+  }
+
+  private createEntry(id: string, assetId: string): EnemyModelEntry {    const factory = ENEMY_MODEL_FACTORIES[assetId as EnemyAssetId];
     const model = factory ? factory() : new THREE.Group();
     model.name = id;
     setCastShadow(model, true);
@@ -284,11 +406,12 @@ export class EnemyLayer implements IRenderLayer {
     model.traverse((node) => {
       if (!(node instanceof THREE.Mesh)) return;
       const mat = node.material;
-      if (mat instanceof THREE.MeshStandardMaterial) {
+      if (mat instanceof THREE.MeshStandardMaterial || mat instanceof THREE.MeshPhongMaterial) {
         materials.push({
           mat,
           baseEmissive: mat.emissive.clone(),
           baseIntensity: mat.emissiveIntensity,
+          isBlade: node.userData.isBlade === true,
         });
       }
     });

@@ -4,7 +4,14 @@ import { AssetRegistry } from '../data/AssetRegistry';
 import type { EnemyArchetype } from '../data/AssetRegistry';
 import { PLAYER_RADIUS } from './world';
 
-export type EnemyState = 'idle' | 'chase' | 'telegraph' | 'attack' | 'recover';
+export type EnemyState =
+  | 'idle'
+  | 'chase'
+  | 'telegraph'
+  | 'attack'
+  | 'recover'
+  | 'pre_fight'
+  | 'phase_transition';
 
 export interface Enemy {
   id: string;
@@ -36,6 +43,27 @@ export interface Enemy {
   strikeRange: number;
   /** Optional quest grouping, e.g. 'alley', 'patrol', 'boss'. */
   group?: string;
+  /** Ronin boss phase: 0 = pre-fight, 1 = phase one, 2 = phase two (Unsheathed). */
+  roninPhase?: number;
+  /** Ronin current move key (draw / crescent / twin / combo / wave / whirlwind). */
+  roninMove?: string;
+  /** Ronin combo hit index within a multi-hit attack. */
+  roninComboStep?: number;
+  /** Remaining invulnerability seconds (phase transition stance-shift). */
+  roninInvuln?: number;
+  /** Blade glow brightness (0..1), boosted in phase two. */
+  roninGlow?: number;
+}
+
+/** A transient expanding shockwave ring (Gale pushback / phase transition). */
+export interface Shockwave {
+  x: number;
+  y: number;
+  age: number;
+  life: number;
+  r: number;
+  g: number;
+  b: number;
 }
 
 export interface EnemyProjectile {
@@ -46,6 +74,8 @@ export interface EnemyProjectile {
   life: number;
   damage: number;
   radius: number;
+  /** True for the Ronin's golden crescent wave (rendered as a slash). */
+  golden?: boolean;
 }
 
 export interface FriendlyProjectile {
@@ -88,11 +118,23 @@ const PROJECTILE_RADIUS = 0.35;
 
 const PARRY_STAGGER_DURATION = 1.6;
 const BOSS_STAGGER_DURATION = 2.0;
+const RONIN_STAGGER_DURATION = 1.8;
 const DEFLECT_RANGE = 2.4;
 const DEFLECT_DAMAGE = 30;
 const FRIENDLY_PROJECTILE_SPEED = 14;
 const FRIENDLY_PROJECTILE_LIFE = 2.5;
 const FRIENDLY_PROJECTILE_RADIUS = 0.3;
+
+// --- The Ronin boss tuning ----------------------------------------------------
+const RONIN_LUNGE_SPEED = 22;
+const RONIN_TRANSITION_DURATION = 0.9;
+const RONIN_RECOVERY = 0.55;
+const RONIN_PHASE2_SPEED_MULT = 1.35;
+const RONIN_WAVE_SPEED = 12;
+const RONIN_WAVE_LIFE = 3.2;
+const RONIN_WAVE_RADIUS = 0.55;
+const RONIN_WAVE_DAMAGE = 22;
+const SHOCKWAVE_LIFE = 0.55;
 
 /**
  * Owns every live enemy and enemy projectile. Enemy AI reads the player position
@@ -107,6 +149,7 @@ export class EnemyManager {
   private projectiles: EnemyProjectile[] = [];
   private friendly: FriendlyProjectile[] = [];
   private clashes: ClashSpark[] = [];
+  private shockwaves: Shockwave[] = [];
   private spawns: Array<{ assetId: string; x: number; y: number; group?: string }> = [];
   private idCounter = 0;
 
@@ -132,6 +175,11 @@ export class EnemyManager {
   /** Parry clash sparks, rendered by EnemyLayer as expanding bright rings. */
   getClashes(): readonly ClashSpark[] {
     return this.clashes;
+  }
+
+  /** Golden expanding shockwave rings (Gale pushback + phase transition). */
+  getShockwaves(): readonly Shockwave[] {
+    return this.shockwaves;
   }
 
   /** The living Castle Warden boss, or undefined when dead / absent. */
@@ -160,6 +208,12 @@ export class EnemyManager {
     this.projectiles = [];
     this.friendly = [];
     this.clashes = [];
+    this.shockwaves = [];
+  }
+
+  /** Spawn a golden-white (or tinted) expanding shockwave ring. */
+  public spawnShockwave(x: number, y: number, r = 1, g = 0.92, b = 0.6): void {
+    this.shockwaves.push({ x, y, age: 0, life: SHOCKWAVE_LIFE, r, g, b });
   }
 
   /** Respawn every enemy at its original position with full health (player respawn). */
@@ -177,6 +231,7 @@ export class EnemyManager {
     this.updateProjectiles(dt, px, py);
     this.updateFriendlyProjectiles(dt);
     this.updateClashes(dt);
+    this.updateShockwaves(dt);
 
     this.enemies = this.enemies.filter((e) => e.hp > 0);
   }
@@ -207,6 +262,11 @@ export class EnemyManager {
       attackHitRadius: archetype.radius,
       strikeRange: this.meleeStrikeRange(assetId),
       group,
+      roninPhase: assetId === 'the_ronin' ? 0 : undefined,
+      roninMove: undefined,
+      roninComboStep: 0,
+      roninInvuln: 0,
+      roninGlow: 0,
     });
     return this.enemies[this.enemies.length - 1];
   }
@@ -217,6 +277,8 @@ export class EnemyManager {
       case 'blight_stalker':
         return 2.6;
       case 'castle_warden':
+        return 3.4;
+      case 'the_ronin':
         return 3.4;
       case 'blight_sentinel':
         return 3.0;
@@ -263,6 +325,8 @@ export class EnemyManager {
         enemy.stunTimer = Math.max(0, enemy.stunTimer - dt);
         enemy.vx = 0;
         enemy.vy = 0;
+      } else if (enemy.assetId === 'the_ronin') {
+        this.updateRoninEnemy(enemy, archetype, dt, dist, nx, ny, px, py);
       } else if (archetype.kind === 'melee') {
         this.updateMeleeEnemy(enemy, archetype, dt, dist, nx, ny);
       } else {
@@ -305,7 +369,11 @@ export class EnemyManager {
             this.spawnClashSpark(px, py, enemy.x, enemy.y);
             this.staggerEnemy(
               enemy,
-              enemy.assetId === 'castle_warden' ? BOSS_STAGGER_DURATION : PARRY_STAGGER_DURATION,
+              enemy.assetId === 'castle_warden'
+                ? BOSS_STAGGER_DURATION
+                : enemy.assetId === 'the_ronin'
+                  ? RONIN_STAGGER_DURATION
+                  : PARRY_STAGGER_DURATION,
               px,
               py,
             );
@@ -475,6 +543,281 @@ export class EnemyManager {
     }
   }
 
+  // --- The Ronin -----------------------------------------------------------
+
+  /** Kick the Ronin out of pre-fight idle and into phase one (after dialogue). */
+  public beginRoninFight(): void {
+    const ronin = this.enemies.find((e) => e.assetId === 'the_ronin');
+    if (!ronin) return;
+    ronin.roninPhase = 1;
+    ronin.state = 'idle';
+    ronin.roninMove = undefined;
+    ronin.roninInvuln = 0;
+    ronin.roninGlow = 0.35;
+    ronin.stateTimer = 0;
+    ronin.vx = 0;
+    ronin.vy = 0;
+  }
+
+  private updateRoninEnemy(
+    enemy: Enemy,
+    archetype: EnemyArchetype,
+    dt: number,
+    dist: number,
+    nx: number,
+    ny: number,
+    px: number,
+    py: number,
+  ): void {
+    // Phase two transition the moment the Ronin drops below half health.
+    if (enemy.roninPhase === 1 && enemy.hp <= enemy.maxHp * 0.5) {
+      this.startRoninPhaseTransition(enemy);
+    }
+
+    if (enemy.roninInvuln !== undefined && enemy.roninInvuln > 0) {
+      enemy.roninInvuln = Math.max(0, enemy.roninInvuln - dt);
+    }
+
+    // Pre-fight: stands calmly and never attacks.
+    if (enemy.roninPhase === 0) {
+      enemy.vx = 0;
+      enemy.vy = 0;
+      enemy.roninGlow = 0;
+      return;
+    }
+
+    const speed = enemy.roninPhase === 2 ? archetype.speed * RONIN_PHASE2_SPEED_MULT : archetype.speed;
+    enemy.roninGlow = enemy.roninPhase === 2 ? 1.0 : 0.35;
+
+    switch (enemy.state) {
+      case 'idle':
+        enemy.vx = 0;
+        enemy.vy = 0;
+        if (dist <= archetype.aggroRange) enemy.state = 'chase';
+        break;
+
+      case 'chase':
+        if (dist > archetype.aggroRange * 1.6) {
+          enemy.state = 'idle';
+          enemy.vx = 0;
+          enemy.vy = 0;
+        } else if (dist <= enemy.strikeRange) {
+          this.beginRoninAttack(enemy, nx, ny);
+        } else {
+          enemy.vx = nx * speed;
+          enemy.vy = ny * speed;
+        }
+        break;
+
+      case 'telegraph':
+        enemy.vx = 0;
+        enemy.vy = 0;
+        enemy.stateTimer -= dt;
+        if (enemy.stateTimer <= 0) {
+          if (enemy.roninMove === 'wave') {
+            this.fireRoninWave(enemy, px, py);
+            enemy.state = 'recover';
+            enemy.stateTimer = RONIN_RECOVERY;
+          } else {
+            this.beginRoninAttackHit(enemy, nx, ny);
+          }
+        }
+        break;
+
+      case 'attack':
+        enemy.stateTimer -= dt;
+        this.updateRoninAttack(enemy, nx, ny);
+        break;
+
+      case 'recover':
+        enemy.vx = 0;
+        enemy.vy = 0;
+        enemy.stateTimer -= dt;
+        if (enemy.stateTimer <= 0) {
+          enemy.state = dist <= archetype.aggroRange ? 'chase' : 'idle';
+        }
+        break;
+
+      case 'phase_transition':
+        enemy.vx = 0;
+        enemy.vy = 0;
+        enemy.stateTimer -= dt;
+        if (enemy.stateTimer <= 0) {
+          this.completeRoninPhaseTransition(enemy);
+        }
+        break;
+
+      default:
+        enemy.vx = 0;
+        enemy.vy = 0;
+        break;
+    }
+  }
+
+  private startRoninPhaseTransition(enemy: Enemy): void {
+    enemy.roninPhase = 2;
+    enemy.state = 'phase_transition';
+    enemy.stateTimer = RONIN_TRANSITION_DURATION;
+    enemy.roninInvuln = RONIN_TRANSITION_DURATION + 0.1;
+    enemy.vx = 0;
+    enemy.vy = 0;
+
+    // Golden-crimson shockwave burst + gentle nudge if the player is crowding.
+    this.spawnShockwave(enemy.x, enemy.y, 1.0, 0.45, 0.18);
+    const px = this.engine.playerPos.x;
+    const py = this.engine.playerPos.y;
+    const dx = px - enemy.x;
+    const dy = py - enemy.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 0.01 && d < 3.0) {
+      this.engine.applyPlayerKnockback((dx / d) * 3.5, (dy / d) * 3.5);
+    }
+    this.engine.triggerShake(0.28);
+  }
+
+  private completeRoninPhaseTransition(enemy: Enemy): void {
+    enemy.state = 'recover';
+    enemy.stateTimer = RONIN_RECOVERY;
+  }
+
+  /** Choose the next move and begin its telegraph (or backstep for the wave). */
+  private beginRoninAttack(enemy: Enemy, nx: number, ny: number): void {
+    const moves =
+      enemy.roninPhase === 2 ? ['combo', 'wave', 'whirlwind'] : ['draw', 'crescent', 'twin'];
+    enemy.attackVariant = ((enemy.attackVariant ?? 0) + 1) % moves.length;
+    const move = moves[enemy.attackVariant];
+
+    if (move === 'wave') {
+      // Quick backstep, then a golden glint telegraph, then the slash wave.
+      enemy.roninMove = 'wave_backstep';
+      enemy.state = 'attack';
+      enemy.stateTimer = 0.3;
+      enemy.attackHitRadius = 0; // backstep deals no melee contact damage
+      enemy.vx = -nx * 22;
+      enemy.vy = -ny * 22;
+      return;
+    }
+
+    enemy.roninMove = move;
+    enemy.state = 'telegraph';
+    enemy.vx = 0;
+    enemy.vy = 0;
+    switch (move) {
+      case 'draw':
+        enemy.stateTimer = 0.5;
+        break;
+      case 'crescent':
+        enemy.stateTimer = 0.45;
+        break;
+      case 'twin':
+        enemy.stateTimer = 0.42;
+        break;
+      case 'combo':
+        enemy.stateTimer = 0.4;
+        break;
+      case 'whirlwind':
+        enemy.stateTimer = 0.46;
+        break;
+      default:
+        enemy.stateTimer = 0.45;
+        break;
+    }
+  }
+
+  /** Start the damaging window for the telegraphed move. */
+  private beginRoninAttackHit(enemy: Enemy, nx: number, ny: number): void {
+    enemy.state = 'attack';
+    enemy.roninComboStep = 0;
+    switch (enemy.roninMove) {
+      case 'draw':
+        enemy.attackHitRadius = 3.5;
+        enemy.stateTimer = 0.22;
+        enemy.vx = nx * RONIN_LUNGE_SPEED;
+        enemy.vy = ny * RONIN_LUNGE_SPEED;
+        break;
+      case 'crescent':
+        enemy.attackHitRadius = 3.8;
+        enemy.stateTimer = 0.3;
+        enemy.vx = nx * 6;
+        enemy.vy = ny * 6;
+        break;
+      case 'twin':
+        enemy.attackHitRadius = 3.3;
+        enemy.stateTimer = 0.18;
+        enemy.vx = nx * 5;
+        enemy.vy = ny * 5;
+        break;
+      case 'combo':
+        enemy.attackHitRadius = 3.3;
+        enemy.stateTimer = 0.22;
+        enemy.vx = nx * 5;
+        enemy.vy = ny * 5;
+        break;
+      case 'whirlwind':
+        enemy.attackHitRadius = 3.8;
+        enemy.stateTimer = 0.4;
+        enemy.vx = 0;
+        enemy.vy = 0;
+        break;
+      default:
+        enemy.attackHitRadius = 3.3;
+        enemy.stateTimer = 0.2;
+        break;
+    }
+  }
+
+  /** Advance a multi-hit combo or close the attack into recovery. */
+  private updateRoninAttack(enemy: Enemy, nx: number, ny: number): void {
+    const move = enemy.roninMove ?? '';
+
+    if (move === 'wave_backstep') {
+      if (enemy.stateTimer <= 0) {
+        enemy.roninMove = 'wave';
+        enemy.state = 'telegraph';
+        enemy.stateTimer = 0.52;
+        enemy.vx = 0;
+        enemy.vy = 0;
+      }
+      return;
+    }
+
+    if (enemy.stateTimer > 0) return;
+
+    const isCombo = move === 'twin' || move === 'combo';
+    const maxHits = move === 'twin' ? 2 : move === 'combo' ? 3 : 1;
+    const step = (enemy.roninComboStep ?? 0) + 1;
+    if (isCombo && step < maxHits) {
+      enemy.roninComboStep = step;
+      enemy.stateTimer = move === 'combo' ? 0.22 : 0.18;
+      enemy.vx = nx * 5;
+      enemy.vy = ny * 5;
+      return;
+    }
+
+    enemy.state = 'recover';
+    enemy.stateTimer = RONIN_RECOVERY;
+    enemy.vx = 0;
+    enemy.vy = 0;
+  }
+
+  /** Launch the Ronin's golden crescent energy slash wave (parry-deflectable). */
+  private fireRoninWave(enemy: Enemy, px: number, py: number): void {
+    const dx = px - enemy.x;
+    const dy = py - enemy.y;
+    const d = Math.hypot(dx, dy) || 1;
+    this.projectiles.push({
+      x: enemy.x,
+      y: enemy.y,
+      vx: (dx / d) * RONIN_WAVE_SPEED,
+      vy: (dy / d) * RONIN_WAVE_SPEED,
+      life: RONIN_WAVE_LIFE,
+      damage: RONIN_WAVE_DAMAGE,
+      radius: RONIN_WAVE_RADIUS,
+      golden: true,
+    });
+    this.engine.triggerShake(0.1);
+  }
+
   // --- Combat ----------------------------------------------------------------
 
   /** Put an enemy into a staggered state with a small backward shove. */
@@ -499,6 +842,7 @@ export class EnemyManager {
     for (const enemy of this.enemies) {
       const d = Math.hypot(enemy.x - x, enemy.y - y);
       if (d > radius) continue;
+      if (enemy.roninInvuln !== undefined && enemy.roninInvuln > 0) continue;
       enemy.hp -= damage;
       enemy.stunTimer = Math.max(enemy.stunTimer, stunDuration);
     }
@@ -511,6 +855,7 @@ export class EnemyManager {
 
     for (const enemy of this.enemies) {
       if (enemy.lastHitSwingId === weapon.swingId) continue;
+      if (enemy.roninInvuln !== undefined && enemy.roninInvuln > 0) continue;
 
       const archetype = AssetRegistry.getEnemyArchetype(enemy.assetId);
       const dx = enemy.x - px;
@@ -603,6 +948,7 @@ export class EnemyManager {
       let consumed = f.life <= 0;
       if (!consumed) {
         for (const enemy of this.enemies) {
+          if (enemy.roninInvuln !== undefined && enemy.roninInvuln > 0) continue;
           const archetype = AssetRegistry.getEnemyArchetype(enemy.assetId);
           const d = Math.hypot(enemy.x - f.x, enemy.y - f.y);
           if (d < archetype.radius + f.radius) {
@@ -628,6 +974,12 @@ export class EnemyManager {
   private updateClashes(dt: number): void {
     for (const c of this.clashes) c.age += dt;
     this.clashes = this.clashes.filter((c) => c.age < CLASH_SPARK_DURATION);
+  }
+
+  /** Age and retire shockwave rings. */
+  private updateShockwaves(dt: number): void {
+    for (const s of this.shockwaves) s.age += dt;
+    this.shockwaves = this.shockwaves.filter((s) => s.age < s.life);
   }
 
   private hitPlayer(enemy: Enemy, archetype: EnemyArchetype): void {

@@ -188,6 +188,16 @@ export class WorldModelsLayer implements IRenderLayer {
 
       light.intensity = this.poolIntensity[i];
     }
+
+    // Gentle wind sway for models exposing a `swayGroup` (the great tree).
+    for (const entry of this.entries) {
+      const sway = entry.model.userData.swayGroup as THREE.Group | undefined;
+      if (!sway) continue;
+      const amp = (entry.model.userData.swayAmp as number | undefined) ?? 0.03;
+      const speed = (entry.model.userData.swaySpeed as number | undefined) ?? 0.7;
+      sway.rotation.z = Math.sin(ctx.elapsed * speed) * amp;
+      sway.rotation.x = Math.cos(ctx.elapsed * speed * 0.8) * amp * 0.5;
+    }
   }
 
   public dispose(): void {

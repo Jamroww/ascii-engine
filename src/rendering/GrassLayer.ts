@@ -19,6 +19,18 @@ export interface GrassExclusion {
   radius: number;
 }
 
+/** Theme values baked into a freshly-built GrassLayer for the active level. */
+export interface GrassOptions {
+  foliageBase?: THREE.Color;
+  foliageTip?: THREE.Color;
+  heightScale?: number;
+  swayAmp?: number;
+  clearingCenter?: { x: number; y: number };
+  clearingRadius?: number;
+  /** Level 2 swaps wildflowers to warm cream pollen heads / crimson poppies. */
+  warmWildflowers?: boolean;
+}
+
 const MAX_DARK_SPOTS = 16;
 const MAX_EXCLUSIONS = 16;
 const GRASS_RING = 56;
@@ -35,6 +47,10 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
   uniform float uWorldSize;
   uniform vec4 uCull[16];
   uniform float uCullCount;
+  uniform float uHeightScale;
+  uniform float uSwayAmp;
+  uniform vec2 uClearingCenter;
+  uniform float uClearingRadius;
 
   varying vec3 vBase;
   varying vec3 vTip;
@@ -70,14 +86,19 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
       vec4 c = uCull[i];
       if (distance(wrapped, c.xy) < c.z) hide = 1.0;
     }
+    // Smoothly clear wheat inside the dueling circle (disabled when radius = 0).
+    if (uClearingRadius > 0.01) {
+      float clear = 1.0 - smoothstep(uClearingRadius, uClearingRadius + 2.0, distance(wrapped, uClearingCenter));
+      hide = max(hide, clear);
+    }
 
     float tipWeight = uv.y;
 
-    // Smooth wind sway.
+    // Smooth wind sway, amplified for the tall golden wheat.
     float windWave = sin(uTime * 2.2 + wrapped.x * 0.35 - wrapped.y * 0.2 + aPhase);
     float windGust = 0.5 + 0.5 * sin(uTime * 0.9 + wrapped.x * 0.12);
-    float swayX = windWave * (0.16 + windGust * 0.14) * tipWeight;
-    float swayZ = cos(uTime * 1.7 + wrapped.y * 0.3 + aPhase) * 0.05 * tipWeight;
+    float swayX = windWave * (0.16 + windGust * 0.14) * uSwayAmp * tipWeight;
+    float swayZ = cos(uTime * 1.7 + wrapped.y * 0.3 + aPhase) * 0.05 * uSwayAmp * tipWeight;
 
     // Part cleanly around the player's feet.
     vec2 toBlade = wrapped - uPlayerPos;
@@ -87,6 +108,7 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
     vec2 playerBend = pushDir * pushStrength * 0.9 * tipWeight;
 
     vec3 displaced = position;
+    displaced.y *= uHeightScale;
     displaced.x += swayX + playerBend.x;
     displaced.z += swayZ + playerBend.y * 0.6;
     displaced.y -= pushStrength * 0.22 * tipWeight;
@@ -107,6 +129,8 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
 `;
 
 const GRASS_FRAGMENT_SHADER = /* glsl */ `
+  uniform vec3 uBaseColor;
+  uniform vec3 uTipColor;
   uniform vec4 uDarkSpots[16];
   uniform float uDarkCount;
 
@@ -116,8 +140,9 @@ const GRASS_FRAGMENT_SHADER = /* glsl */ `
   varying vec2 vWorldPos;
 
   void main() {
-    // Base -> tip pine/blue-green gradient.
-    vec3 col = mix(vBase, vTip, vTipT);
+    // Base -> tip gradient driven by the live theme colours; the per-instance
+    // vBase / vTip hold a subtle brightness variation (grayscale ~0.85..1.2).
+    vec3 col = mix(uBaseColor * vBase, uTipColor * vTip, vTipT);
 
     // Darken under tree / building footprints so the grass reads as shadowed
     // ground instead of a flat luminous carpet.
@@ -130,7 +155,7 @@ const GRASS_FRAGMENT_SHADER = /* glsl */ `
     }
     col *= dark;
 
-    // Soft tip lift so blade tops catch the moonlight.
+    // Soft tip lift so blade tops catch the light.
     col *= 0.88 + vTipT * 0.18;
 
     gl_FragColor = vec4(col, 1.0);
@@ -146,6 +171,8 @@ const FLOWER_VERTEX_SHADER = /* glsl */ `
   uniform float uWorldSize;
   uniform vec4 uCull[16];
   uniform float uCullCount;
+  uniform vec2 uClearingCenter;
+  uniform float uClearingRadius;
 
   varying vec3 vColor;
 
@@ -170,6 +197,10 @@ const FLOWER_VERTEX_SHADER = /* glsl */ `
       if (float(i) >= uCullCount) break;
       vec4 c = uCull[i];
       if (distance(wrapped, c.xy) < c.z) hide = 1.0;
+    }
+    if (uClearingRadius > 0.01) {
+      float clear = 1.0 - smoothstep(uClearingRadius, uClearingRadius + 2.0, distance(wrapped, uClearingCenter));
+      hide = max(hide, clear);
     }
 
     vec3 delta = vec3(wrapped.x - worldPos.x, 0.0, -(wrapped.y - worldPos.y));
@@ -228,12 +259,11 @@ function buildFlowerGeometry(): THREE.BufferGeometry {
 }
 
 /**
- * Razor-sharp depth-tested 3D grass. Blades are crisp thin blue-green quads
- * swaying in the wind and parting around the player, with wildflowers rendered
- * as a separate mesh of tiny non-stretched flat speck quads. Both wrap around
- * the player in a fixed ring so the instance budget stays constant regardless
- * of map size, and both sample the terrain + building exclusions to hide on
- * water, dirt paths and inside building footprints.
+ * Razor-sharp depth-tested 3D grass. Blades are crisp thin quads swaying in the
+ * wind and parting around the player, with wildflowers rendered as a separate
+ * mesh of tiny non-stretched flat speck quads. Base/tip colours are live
+ * uniforms so the Settings palette studio can recolor the meadow/wheat in real
+ * time without rebuilding geometry.
  */
 export class GrassLayer implements IRenderLayer {
   public readonly object3D = new THREE.Group();
@@ -242,21 +272,13 @@ export class GrassLayer implements IRenderLayer {
   private readonly material: THREE.ShaderMaterial;
   private readonly flowerMaterial: THREE.ShaderMaterial;
 
-  constructor(terrain: TerrainGrid, count = 87400, areaSize = 56) {
+  constructor(terrain: TerrainGrid, options: GrassOptions = {}, count = 87400, areaSize = 56) {
     const geometry = buildBladeGeometry();
     const flowerGeometry = buildFlowerGeometry();
 
     const baseColors = new Float32Array(count * 3);
     const tipColors = new Float32Array(count * 3);
     const phases = new Float32Array(count);
-
-    // Nocturnal pine / blue-green palette: #071e15 roots -> #194d38 lit tips.
-    const BASE_R = 0x07 / 255;
-    const BASE_G = 0x1e / 255;
-    const BASE_B = 0x15 / 255;
-    const TIP_R = 0x19 / 255;
-    const TIP_G = 0x4d / 255;
-    const TIP_B = 0x38 / 255;
 
     // x, y, radius, strength per shadow footprint.
     const darkSpotUniforms = new Float32Array(MAX_DARK_SPOTS * 4);
@@ -276,6 +298,14 @@ export class GrassLayer implements IRenderLayer {
         uCullCount: { value: 0 },
         uDarkSpots: { value: darkSpotUniforms },
         uDarkCount: { value: 0 },
+        uBaseColor: { value: options.foliageBase?.clone() ?? new THREE.Color('#071e15') },
+        uTipColor: { value: options.foliageTip?.clone() ?? new THREE.Color('#194d38') },
+        uHeightScale: { value: options.heightScale ?? 1.0 },
+        uSwayAmp: { value: options.swayAmp ?? 1.0 },
+        uClearingCenter: {
+          value: new THREE.Vector2(options.clearingCenter?.x ?? 0, options.clearingCenter?.y ?? 0),
+        },
+        uClearingRadius: { value: options.clearingRadius ?? 0 },
       },
       depthTest: true,
       depthWrite: false,
@@ -297,6 +327,10 @@ export class GrassLayer implements IRenderLayer {
         uWorldSize: { value: terrain.worldSize },
         uCull: { value: flowerCullUniforms },
         uCullCount: { value: 0 },
+        uClearingCenter: {
+          value: new THREE.Vector2(options.clearingCenter?.x ?? 0, options.clearingCenter?.y ?? 0),
+        },
+        uClearingRadius: { value: options.clearingRadius ?? 0 },
       },
       depthTest: true,
       depthWrite: false,
@@ -332,12 +366,12 @@ export class GrassLayer implements IRenderLayer {
       phases[placed] = Math.random() * Math.PI * 2;
 
       const shade = 0.85 + Math.random() * 0.35;
-      baseColors[placed * 3 + 0] = BASE_R * shade;
-      baseColors[placed * 3 + 1] = BASE_G * shade;
-      baseColors[placed * 3 + 2] = BASE_B * shade;
-      tipColors[placed * 3 + 0] = TIP_R * shade;
-      tipColors[placed * 3 + 1] = TIP_G * shade;
-      tipColors[placed * 3 + 2] = TIP_B * shade;
+      baseColors[placed * 3 + 0] = shade;
+      baseColors[placed * 3 + 1] = shade;
+      baseColors[placed * 3 + 2] = shade;
+      tipColors[placed * 3 + 0] = shade;
+      tipColors[placed * 3 + 1] = shade;
+      tipColors[placed * 3 + 2] = shade;
 
       placed++;
     }
@@ -348,9 +382,11 @@ export class GrassLayer implements IRenderLayer {
     geometry.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phases, 1));
     this.mesh.instanceMatrix.needsUpdate = true;
 
-    // Place sparse wildflowers: pale moon-white with rare muted ember-orange.
+    // Place sparse wildflowers: pale moon-white with rare muted ember-orange in
+    // Level 1; warm golden-cream pollen heads / crimson poppies in Level 2.
     const flowerDummy = new THREE.Object3D();
     const flowerColors = new Float32Array(flowerCount * 3);
+    const warm = options.warmWildflowers === true;
     let flowerPlaced = 0;
     let flowerAttempts = 0;
     while (flowerPlaced < flowerCount && flowerAttempts < flowerCount * 12) {
@@ -367,10 +403,25 @@ export class GrassLayer implements IRenderLayer {
       flowerDummy.updateMatrix();
       this.flowers.setMatrixAt(flowerPlaced, flowerDummy.matrix);
 
-      const warm = Math.random() < 0.12;
-      flowerColors[flowerPlaced * 3 + 0] = warm ? 0xb0 / 255 : 0xee / 255;
-      flowerColors[flowerPlaced * 3 + 1] = warm ? 0x6a / 255 : 0xf6 / 255;
-      flowerColors[flowerPlaced * 3 + 2] = warm ? 0x3a / 255 : 0xff / 255;
+      // Warm variant ratio: 12% ember in Level 1, 55% crimson poppy in Level 2.
+      const isWarm = Math.random() < (warm ? 0.55 : 0.12);
+      if (warm) {
+        if (isWarm) {
+          // Crimson poppy.
+          flowerColors[flowerPlaced * 3 + 0] = 0xc0 / 255;
+          flowerColors[flowerPlaced * 3 + 1] = 0x2e / 255;
+          flowerColors[flowerPlaced * 3 + 2] = 0x2a / 255;
+        } else {
+          // Golden-cream pollen head.
+          flowerColors[flowerPlaced * 3 + 0] = 0xf2 / 255;
+          flowerColors[flowerPlaced * 3 + 1] = 0xd2 / 255;
+          flowerColors[flowerPlaced * 3 + 2] = 0x7c / 255;
+        }
+      } else {
+        flowerColors[flowerPlaced * 3 + 0] = isWarm ? 0xb0 / 255 : 0xee / 255;
+        flowerColors[flowerPlaced * 3 + 1] = isWarm ? 0x6a / 255 : 0xf6 / 255;
+        flowerColors[flowerPlaced * 3 + 2] = isWarm ? 0x3a / 255 : 0xff / 255;
+      }
 
       flowerPlaced++;
     }
@@ -397,6 +448,12 @@ export class GrassLayer implements IRenderLayer {
   public setBuildingExclusions(exclusions: GrassExclusion[]): void {
     this.writeExclusions(this.material, exclusions);
     this.writeExclusions(this.flowerMaterial, exclusions);
+  }
+
+  /** Live-update the blade base/tip colours (Palette Studio). */
+  public setFoliageColors(base: THREE.Color, tip: THREE.Color): void {
+    (this.material.uniforms.uBaseColor.value as THREE.Color).copy(base);
+    (this.material.uniforms.uTipColor.value as THREE.Color).copy(tip);
   }
 
   private writeExclusions(material: THREE.ShaderMaterial, exclusions: GrassExclusion[]): void {
