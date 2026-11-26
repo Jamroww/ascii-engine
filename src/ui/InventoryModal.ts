@@ -17,12 +17,12 @@ interface QuestView {
 
 function buildTaintedCatch(stage: QuestStage): QuestView {
   const steps: QuestStep[] = [
-    { label: 'Speak with the Ferryman by the dock.', done: stage !== 'not_started' },
-    { label: 'Purge the upstream Blight.', done: stage === 'upstream_cleared' || stage === 'completed' },
-    { label: 'Return to the Ferryman.', done: stage === 'completed' },
+    { label: 'Fight through the harbor alleyway.', done: stage !== 'alley_ambush' },
+    { label: 'Speak with the survivors in the clearing.', done: stage === 'assault_castle' || stage === 'completed' },
+    { label: 'Defeat the Castle Warden.', done: stage === 'completed' },
   ];
   return {
-    name: 'The Tainted Catch',
+    name: 'Act 1 — Harbor to Castle',
     state: stage === 'completed' ? 'completed' : 'active',
     steps,
     note: '',

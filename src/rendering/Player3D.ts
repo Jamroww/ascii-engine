@@ -65,6 +65,7 @@ export class Player3D {
   private capePitch = 0;
   private elapsed = 0;
   private lastPortraitTime = -1;
+  private parrying = false;
 
   // Base transforms captured at build time so animation layers cleanly on top.
   private readonly hipsBaseY: number;
@@ -313,8 +314,14 @@ export class Player3D {
     this.rig.rightLeg.rotation.x = -legSwing - idleLeg;
     this.rig.leftKnee.rotation.x = kneeBendL;
     this.rig.rightKnee.rotation.x = kneeBendR;
-    this.rig.leftArm.rotation.x = armSwing + idleArm;
-    this.rig.rightArm.rotation.x = -armSwing - idleArm;
+    if (this.parrying) {
+      // Horizontal guard posture: both arms sweep forward across the front.
+      this.rig.leftArm.rotation.x = -0.7;
+      this.rig.rightArm.rotation.x = -0.78;
+    } else {
+      this.rig.leftArm.rotation.x = armSwing + idleArm;
+      this.rig.rightArm.rotation.x = -armSwing - idleArm;
+    }
     this.rig.leftElbow.rotation.x = elbowBendL;
     this.rig.rightElbow.rotation.x = elbowBendR;
 
@@ -391,6 +398,11 @@ export class Player3D {
 
   public getPortraitPixels(): Uint8Array {
     return this.portraitPixels;
+  }
+
+  /** Drive the parry guard pose from the engine while the parry window is open. */
+  public setParrying(parrying: boolean): void {
+    this.parrying = parrying;
   }
 
   public dispose(): void {

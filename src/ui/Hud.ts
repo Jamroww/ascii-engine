@@ -18,6 +18,16 @@ export interface HudState {
   /** 0..1 */
   radiantCooldownFraction: number;
   radiantCooldownSeconds: number;
+  parryReady: boolean;
+  /** 0..1 */
+  parryCooldownFraction: number;
+  parryCooldownSeconds: number;
+  /** Boss bar (top-center) — visible only while in aggro range of the boss. */
+  bossVisible: boolean;
+  bossName: string;
+  bossSubtitle: string;
+  /** 0..1 */
+  bossHpFraction: number;
 }
 
 const PORTRAIT_SIZE = 64;
@@ -95,6 +105,15 @@ export class Hud {
   private readonly burstSweep: HTMLDivElement;
   private readonly burstState: HTMLSpanElement;
 
+  private readonly parryBadge: HTMLDivElement;
+  private readonly parrySweep: HTMLDivElement;
+  private readonly parryState: HTMLSpanElement;
+
+  private readonly bossBar: HTMLDivElement;
+  private readonly bossName: HTMLSpanElement;
+  private readonly bossSub: HTMLSpanElement;
+  private readonly bossFill: HTMLDivElement;
+
   private readonly inventoryButton: HTMLButtonElement;
 
   private toastTimer: number | null = null;
@@ -107,6 +126,10 @@ export class Hud {
     this.element.innerHTML = `
       <div class="hud-toast"></div>
       <div class="hud-interact" hidden></div>
+      <div class="hud-bossbar" hidden>
+        <div class="hud-bossbar__title"><span class="hud-bossbar__name"></span><span class="hud-bossbar__sub"></span></div>
+        <div class="hud-bossbar__meter"><div class="hud-bossbar__fill"></div></div>
+      </div>
       <div class="hud-panel">
         ${FRAME_SVG}
         <div class="hud-panel__inner">
@@ -175,6 +198,14 @@ export class Hud {
               </div>
               <div class="hud-ability__state hud-ability__state--burst">RDY</div>
             </div>
+            <div class="hud-ability hud-ability--parry">
+              <div class="hud-ability__sweep"></div>
+              <div class="hud-ability__row">
+                <span class="hud-ability__key">[RMB]</span>
+                <span class="hud-ability__name">Parry</span>
+              </div>
+              <div class="hud-ability__state hud-ability__state--parry">RDY</div>
+            </div>
             <button class="hud-ability hud-inventory-button" type="button">
               <div class="hud-ability__row">
                 <span class="hud-ability__key">[I]</span>
@@ -217,6 +248,15 @@ export class Hud {
     this.burstBadge = this.element.querySelector('.hud-ability--burst') as HTMLDivElement;
     this.burstSweep = this.burstBadge.querySelector('.hud-ability__sweep') as HTMLDivElement;
     this.burstState = this.burstBadge.querySelector('.hud-ability__state--burst') as HTMLSpanElement;
+
+    this.parryBadge = this.element.querySelector('.hud-ability--parry') as HTMLDivElement;
+    this.parrySweep = this.parryBadge.querySelector('.hud-ability__sweep') as HTMLDivElement;
+    this.parryState = this.parryBadge.querySelector('.hud-ability__state--parry') as HTMLSpanElement;
+
+    this.bossBar = this.element.querySelector('.hud-bossbar') as HTMLDivElement;
+    this.bossName = this.element.querySelector('.hud-bossbar__name') as HTMLSpanElement;
+    this.bossSub = this.element.querySelector('.hud-bossbar__sub') as HTMLSpanElement;
+    this.bossFill = this.element.querySelector('.hud-bossbar__fill') as HTMLDivElement;
 
     this.inventoryButton = this.element.querySelector('.hud-inventory-button') as HTMLButtonElement;
     this.inventoryButton.addEventListener('click', () => this.inventoryHandler?.());
@@ -280,6 +320,22 @@ export class Hud {
       this.burstState.textContent = 'LOCKED';
       this.burstState.classList.remove('is-ready');
     }
+
+    // Parry plate: always unlocked, gated only by its cooldown.
+    this.updateBadge(
+      this.parryBadge,
+      this.parrySweep,
+      this.parryState,
+      state.parryReady,
+      state.parryCooldownFraction,
+      state.parryCooldownSeconds
+    );
+
+    // Boss bar (top-center, Doom-styled monochrome).
+    this.bossBar.hidden = !state.bossVisible;
+    this.bossName.textContent = state.bossName;
+    this.bossSub.textContent = state.bossSubtitle;
+    this.setBar(this.bossFill, state.bossHpFraction);
   }
 
   /** Show a transient banner near the top of the screen. */

@@ -3,6 +3,13 @@ import { createIronSwordModel, createLanternBladeModel, type WeaponAssetId } fro
 import { disposeModelTree, setCastShadow } from './modelUtils';
 
 const SWING_DURATION = 0.22;
+const PARRY_VISUAL_DURATION = 0.24;
+
+interface SwordMatRef {
+  mat: THREE.MeshStandardMaterial;
+  baseEmissive: THREE.Color;
+  baseIntensity: number;
+}
 
 /**
  * Live 3D sword attached to the player's right-hand pivot. The combat contract
@@ -23,6 +30,9 @@ export class Weapon {
   private swinging = false;
   private swingT = 0;
   private swingCount = 0;
+  private parrying = false;
+  private parryT = 0;
+  private swordMatRefs: SwordMatRef[] = [];
 
   constructor(handPivot: THREE.Group) {
     this.handPivot = handPivot;
@@ -31,6 +41,22 @@ export class Weapon {
     this.swordModel.rotation.x = -Math.PI / 2;
     setCastShadow(this.swordModel, true);
     this.handPivot.add(this.swordModel);
+    this.cacheSwordMaterials();
+  }
+
+  private cacheSwordMaterials(): void {
+    this.swordMatRefs = [];
+    this.swordModel.traverse((node) => {
+      if (!(node instanceof THREE.Mesh)) return;
+      const mat = node.material;
+      if (mat instanceof THREE.MeshStandardMaterial) {
+        this.swordMatRefs.push({
+          mat,
+          baseEmissive: mat.emissive.clone(),
+          baseIntensity: mat.emissiveIntensity,
+        });
+      }
+    });
   }
 
   public update(
@@ -49,7 +75,24 @@ export class Weapon {
       this.angle = Math.atan2(dirX, dirY);
     }
 
-    if (this.swinging) {
+    if (this.parrying) {
+      this.parryT += dt;
+      const p = Math.min(1, this.parryT / PARRY_VISUAL_DURATION);
+      const sweep = -0.85 + 1.7 * (p < 0.5 ? p * 2 : 2 - p * 2);
+      this.handPivot.rotation.y = sweep;
+      const glint = p < 0.3 ? 1 - p / 0.3 : 0;
+      for (const ref of this.swordMatRefs) {
+        ref.mat.emissive.setRGB(1, 1, 1);
+        ref.mat.emissiveIntensity = glint * 3.2;
+      }
+      if (p >= 1) {
+        this.parrying = false;
+        for (const ref of this.swordMatRefs) {
+          ref.mat.emissive.copy(ref.baseEmissive);
+          ref.mat.emissiveIntensity = ref.baseIntensity;
+        }
+      }
+    } else if (this.swinging) {
       this.swingT += dt;
       const p = Math.min(1, this.swingT / SWING_DURATION);
       const ease = p * (2 - p); // ease-out
@@ -72,6 +115,7 @@ export class Weapon {
     this.swordModel.rotation.x = -Math.PI / 2;
     setCastShadow(this.swordModel, true);
     this.handPivot.add(this.swordModel);
+    this.cacheSwordMaterials();
   }
 
   /** Update the combat reach / arc from the equipped weapon. */
@@ -89,6 +133,12 @@ export class Weapon {
       this.swingT = 0;
       this.swingCount += 1;
     }
+  }
+
+  /** Begin the brief horizontal guard sweep + blade glint. */
+  public parry(): void {
+    this.parrying = true;
+    this.parryT = 0;
   }
 
   /** True while a swing is in flight. */

@@ -2,7 +2,7 @@ import { TerrainGrid } from './TerrainGrid';
 import type { Engine } from './Engine';
 import { GroundLayer } from '../rendering/GroundLayer';
 import { GrassLayer } from '../rendering/GrassLayer';
-import type { GrassDarkSpot } from '../rendering/GrassLayer';
+import type { GrassDarkSpot, GrassExclusion } from '../rendering/GrassLayer';
 import { WaterLayer } from '../rendering/WaterLayer';
 import type { WaterLight } from '../rendering/WaterLayer';
 import { ForestLayer, generateRiversideForest } from '../rendering/ForestLayer';
@@ -13,7 +13,6 @@ import { WorldModelsLayer } from '../rendering/WorldModelsLayer';
 import type { WorldModelPlacement } from '../rendering/WorldModelsLayer';
 import { AssetRegistry } from '../data/AssetRegistry';
 import type { LevelData, PlacedEntity } from '../data/levelTypes';
-import { BOULDERS } from './world';
 
 /**
  * Owns the active level: its `LevelData`, `TerrainGrid`, and the world layers
@@ -33,59 +32,90 @@ export class LevelManager {
   private building: BuildingLayer | null = null;
   private worldModels: WorldModelsLayer | null = null;
 
+  private announcedOpening = false;
+
   constructor(engine: Engine) {
     this.engine = engine;
   }
 
   public static createDefaultVillageLevel(): LevelData {
-    const terrain = TerrainGrid.bakeFromLegacy();
-
-    const boulders: PlacedEntity[] = BOULDERS.map((b, i) => ({
-      id: `boulder_${i}`,
-      kind: 'boulder',
-      assetId: 'river_boulder',
-      x: b.x,
-      y: b.y,
-      radius: b.r,
-    }));
+    const terrain = TerrainGrid.bakeAct1Harbor();
 
     const entities: PlacedEntity[] = [
-      // West clearing: fisher cottage with the lantern-keeper nearby.
-      { id: 'cottage_fisher', kind: 'building', assetId: 'cottage_fisher', x: -7, y: 1 },
-      { id: 'npc_lantern_keeper', kind: 'npc', assetId: 'npc_lantern_keeper', x: -4, y: 3 },
-      { id: 'prop_fish_rack', kind: 'prop', assetId: 'prop_drying_fish_rack', x: -5, y: 5 },
-      { id: 'prop_barrels', kind: 'prop', assetId: 'prop_barrels_crates', x: -9, y: 4 },
+      // --- Zone 1: Harbor & lantern pier (south-center) ---
+      { id: 'village_dock', kind: 'building', assetId: 'village_dock', x: 2, y: -13 },
+      { id: 'fishing_boat', kind: 'prop', assetId: 'fishing_boat', x: 6, y: -14 },
 
-      // Riverfront: boathouse + wooden dock with the ferryman at his post.
-      { id: 'cottage_boathouse', kind: 'building', assetId: 'cottage_boathouse', x: 2, y: 5 },
-      { id: 'village_dock', kind: 'building', assetId: 'village_dock', x: 6, y: 1 },
-      { id: 'npc_ferryman', kind: 'npc', assetId: 'npc_ferryman', x: 5.4, y: 2.2 },
+      // --- Zone 2: Alleyway ambush (west & north bay arc) ---
+      { id: 'cottage_fisher_1', kind: 'building', assetId: 'cottage_fisher', x: -18, y: -8 },
+      { id: 'cottage_boathouse_1', kind: 'building', assetId: 'cottage_boathouse', x: -24, y: -2 },
+      { id: 'cottage_fisher_2', kind: 'building', assetId: 'cottage_fisher', x: -14, y: 2 },
+      { id: 'cottage_fisher_3', kind: 'building', assetId: 'cottage_fisher', x: -24, y: 8 },
+      { id: 'cottage_boathouse_2', kind: 'building', assetId: 'cottage_boathouse', x: -12, y: 8 },
+      { id: 'cottage_fisher_4', kind: 'building', assetId: 'cottage_fisher', x: -16, y: -14 },
 
-      // Southern clearing: a dormant Light Shrine awaiting purification.
-      { id: 'light_shrine', kind: 'shrine', assetId: 'light_shrine', x: -3, y: -7 },
+      { id: 'barricade_alley_1', kind: 'prop', assetId: 'alley_barricade', x: -13, y: -2 },
+      { id: 'barricade_alley_2', kind: 'prop', assetId: 'alley_barricade', x: -25, y: 3 },
+      { id: 'fence_alley_1', kind: 'building', assetId: 'fence_stone_wall', x: -19, y: 1 },
+      { id: 'fence_alley_2', kind: 'building', assetId: 'fence_stone_wall', x: -23, y: 6 },
+      { id: 'prop_barrels_1', kind: 'prop', assetId: 'prop_barrels_crates', x: -16, y: -6 },
+      { id: 'prop_fish_rack_1', kind: 'prop', assetId: 'prop_drying_fish_rack', x: -20, y: -5 },
 
-      // Northern upstream Blight: poison node alongside the starter enemies.
-      { id: 'poison_node', kind: 'node', assetId: 'poison_node', x: 1, y: 19 },
-      { id: 'enemy_stalker_1', kind: 'enemy', assetId: 'blight_stalker', x: 0, y: 15 },
-      { id: 'enemy_stalker_2', kind: 'enemy', assetId: 'blight_stalker', x: 4.5, y: 18 },
-      { id: 'enemy_spitter_1', kind: 'enemy', assetId: 'spore_spitter', x: 1.5, y: 17 },
+      { id: 'enemy_alley_stalker_1', kind: 'enemy', assetId: 'blight_stalker', x: -15, y: 0, group: 'alley' },
+      { id: 'enemy_alley_stalker_2', kind: 'enemy', assetId: 'blight_stalker', x: -18, y: 5, group: 'alley' },
+      { id: 'enemy_alley_spitter_1', kind: 'enemy', assetId: 'spore_spitter', x: -12, y: 4, group: 'alley' },
 
-      // Curated hero trees (3D) framed in the open clearing.
-      { id: 'tree_pine_1', kind: 'tree', assetId: 'tree_pine', x: -8, y: 9 },
-      { id: 'tree_oak_1', kind: 'tree', assetId: 'tree_oak', x: -14, y: -3 },
-      { id: 'tree_wilted_1', kind: 'tree', assetId: 'tree_wilted', x: -3, y: 12 },
+      // --- Zone 3: Survivor clearing & pine woods (north-west) ---
+      { id: 'cottage_survivors', kind: 'building', assetId: 'cottage_fisher', x: -31, y: 13 },
+      { id: 'prop_campfire', kind: 'prop', assetId: 'prop_campfire_ring', x: -28, y: 10 },
+      { id: 'npc_ferryman', kind: 'npc', assetId: 'npc_ferryman', x: -26, y: 9 },
+      { id: 'npc_lantern_keeper', kind: 'npc', assetId: 'npc_lantern_keeper', x: -30, y: 11 },
+      { id: 'npc_elder', kind: 'npc', assetId: 'npc_elder', x: -29, y: 13 },
+      { id: 'npc_herbalist', kind: 'npc', assetId: 'npc_herbalist', x: -27, y: 14 },
 
-      ...boulders,
+      { id: 'tree_pine_1', kind: 'tree', assetId: 'tree_pine', x: -34, y: 4 },
+      { id: 'tree_pine_2', kind: 'tree', assetId: 'tree_pine', x: -33, y: 8 },
+      { id: 'tree_pine_3', kind: 'tree', assetId: 'tree_pine', x: -32, y: 16 },
+      { id: 'tree_pine_4', kind: 'tree', assetId: 'tree_pine', x: -24, y: 16 },
+      { id: 'tree_oak_1', kind: 'tree', assetId: 'tree_oak', x: -31, y: 6 },
+      { id: 'tree_oak_2', kind: 'tree', assetId: 'tree_oak', x: -25, y: 14 },
+
+      { id: 'light_shrine', kind: 'shrine', assetId: 'light_shrine', x: -28, y: 19 },
+      { id: 'poison_node_trail', kind: 'node', assetId: 'poison_node', x: -16, y: 22 },
+
+      // --- Zone 4: Blighted river, bridge & castle courtyard (north-east) ---
+      { id: 'tree_wilted_1', kind: 'tree', assetId: 'tree_wilted', x: 6, y: 24 },
+      { id: 'tree_wilted_2', kind: 'tree', assetId: 'tree_wilted', x: 10, y: 28 },
+      { id: 'tree_wilted_3', kind: 'tree', assetId: 'tree_wilted', x: 14, y: 33 },
+      { id: 'tree_wilted_4', kind: 'tree', assetId: 'tree_wilted', x: 18, y: 38 },
+      { id: 'tree_wilted_5', kind: 'tree', assetId: 'tree_wilted', x: 24, y: 40 },
+      { id: 'tree_wilted_6', kind: 'tree', assetId: 'tree_wilted', x: 30, y: 38 },
+
+      { id: 'boulder_river_1', kind: 'boulder', assetId: 'rock_river_boulder', x: 8, y: 22 },
+      { id: 'boulder_river_2', kind: 'boulder', assetId: 'rock_river_boulder', x: 13, y: 29 },
+      { id: 'boulder_river_3', kind: 'boulder', assetId: 'rock_river_boulder', x: 17, y: 35 },
+
+      { id: 'poison_node_river', kind: 'node', assetId: 'poison_node', x: 10, y: 26 },
+
+      { id: 'enemy_patrol_stalker_1', kind: 'enemy', assetId: 'blight_stalker', x: 12, y: 30, group: 'patrol' },
+      { id: 'enemy_patrol_spitter_1', kind: 'enemy', assetId: 'spore_spitter', x: 15, y: 34, group: 'patrol' },
+      { id: 'enemy_patrol_stalker_2', kind: 'enemy', assetId: 'blight_stalker', x: 19, y: 40, group: 'patrol' },
+
+      { id: 'stone_bridge', kind: 'building', assetId: 'stone_bridge', x: 28, y: 45 },
+      { id: 'castle_watchtower', kind: 'building', assetId: 'castle_watchtower', x: 33, y: 45 },
+      { id: 'castle_gatehouse', kind: 'building', assetId: 'castle_gatehouse', x: 24, y: 49 },
+
+      { id: 'castle_warden', kind: 'enemy', assetId: 'castle_warden', x: 26, y: 47, group: 'boss' },
     ];
 
     return {
-      id: 'riverside_village',
-      name: 'Riverside Village',
+      id: 'act1_harbor',
+      name: 'Act 1 — Harbor to Castle',
       worldSize: terrain.worldSize,
       gridResolution: terrain.resolution,
       terrainBase64: terrain.toBase64(),
       forestSeed: 42,
-      spawn: { x: 0, y: 0 },
+      spawn: { x: 2, y: -16 },
       entities,
     };
   }
@@ -134,6 +164,11 @@ export class LevelManager {
     this.rebuildWorldModels();
     this.rebuildColliders();
     this.rebuildEnemies();
+
+    if (!this.announcedOpening && data.id === 'act1_harbor') {
+      this.announcedOpening = true;
+      this.engine.showToast('Something followed the boat ashore — push through the alley to the village!');
+    }
   }
 
   // --- Editor-ready mutations -------------------------------------------------
@@ -197,6 +232,7 @@ export class LevelManager {
     // Keep water reflections and grass shadow footprints in sync with the move.
     this.water?.setLights(this.collectWaterLights());
     this.grass?.setDarkSpots(this.collectGrassDarkSpots());
+    this.grass?.setBuildingExclusions(this.collectBuildingExclusions());
     this.rebuildColliders();
   }
 
@@ -210,7 +246,7 @@ export class LevelManager {
       this.engine.removeLayer(this.water);
       this.water.dispose();
     }
-    this.water = new WaterLayer(this.terrain);
+    this.water = new WaterLayer(this.terrain, this.terrain.worldSize);
     this.engine.addLayer(this.water);
     this.engine.waterObject = this.water.object3D;
     this.water.setLights(this.collectWaterLights());
@@ -225,19 +261,20 @@ export class LevelManager {
       this.engine.removeLayer(this.grass);
       this.grass.dispose();
     }
-    this.ground = new GroundLayer(this.terrain);
+    this.ground = new GroundLayer(this.terrain, this.terrain.worldSize);
     this.grass = new GrassLayer(this.terrain);
     this.engine.addLayer(this.ground);
     this.engine.addGrassLayer(this.grass);
     this.grass.setDarkSpots(this.collectGrassDarkSpots());
+    this.grass.setBuildingExclusions(this.collectBuildingExclusions());
   }
 
-  /** Warm light sources (cottages, dock, shrine) reflected on the water. */
+  /** Warm light sources (cottages, dock, shrine, nodes) reflected on the water. */
   private collectWaterLights(): WaterLight[] {
     const lights: WaterLight[] = [];
     for (const e of this.data.entities) {
-      if (e.kind === 'building' || e.kind === 'shrine') {
-        lights.push({ x: e.x, y: e.y, radius: 3.6, intensity: 1.0 });
+      if (e.kind === 'building' || e.kind === 'shrine' || e.kind === 'node') {
+        lights.push({ x: e.x, y: e.y, radius: 3.6, intensity: e.kind === 'node' ? 0.7 : 1.0 });
       }
     }
     return lights;
@@ -266,6 +303,16 @@ export class LevelManager {
       }
     }
     return spots;
+  }
+
+  /** Building footprints whose grass blades + wildflowers are hidden entirely. */
+  private collectBuildingExclusions(): GrassExclusion[] {
+    const exclusions: GrassExclusion[] = [];
+    for (const e of this.data.entities) {
+      if (e.kind !== 'building') continue;
+      exclusions.push({ x: e.x, y: e.y, radius: 3.6 });
+    }
+    return exclusions;
   }
 
   private rebuildForest(): void {

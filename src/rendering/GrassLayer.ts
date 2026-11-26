@@ -8,11 +8,20 @@ export interface GrassDarkSpot {
   y: number;
   radius: number;
   strength: number;
-  /** When true, grass blades + wildflowers are culled entirely inside the footprint. */
+  /** Kept for API compatibility; culling is now handled by building exclusions. */
   cull?: boolean;
 }
 
+/** A building footprint whose grass blades + wildflowers are fully hidden. */
+export interface GrassExclusion {
+  x: number;
+  y: number;
+  radius: number;
+}
+
 const MAX_DARK_SPOTS = 16;
+const MAX_EXCLUSIONS = 16;
+const GRASS_RING = 56;
 
 const GRASS_VERTEX_SHADER = /* glsl */ `
   attribute vec3 aBase;
@@ -21,6 +30,11 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
 
   uniform float uTime;
   uniform vec2 uPlayerPos;
+  uniform float uRing;
+  uniform highp sampler2D uTerrainMap;
+  uniform float uWorldSize;
+  uniform vec4 uCull[16];
+  uniform float uCullCount;
 
   varying vec3 vBase;
   varying vec3 vTip;
@@ -36,18 +50,37 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
     vec4 baseLocal = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
     vec4 baseWorld = modelMatrix * baseLocal;
     vec2 worldPos = vec2(baseWorld.x, -baseWorld.z);
-    vWorldPos = worldPos;
+
+    // Wrap/tile the blade into a ring centered on the player so it stays
+    // anchored in world space without sliding, and the budget never scales
+    // with map size.
+    vec2 rel = mod(worldPos - uPlayerPos + uRing * 0.5, uRing) - uRing * 0.5;
+    vec2 wrapped = uPlayerPos + rel;
+    vWorldPos = wrapped;
+
+    // Hide blades inside water, on the dirt footpath, and inside buildings.
+    vec2 terrainUv = (wrapped + uWorldSize * 0.5) / uWorldSize;
+    vec4 t = texture2D(uTerrainMap, terrainUv);
+    float edgeDist = (t.r * 255.0 - 128.0) / 128.0 * 8.0; // world-unit SDF
+    float hide = 0.0;
+    if (edgeDist < 0.35) hide = 1.0;
+    if (t.b > 0.55) hide = 1.0;
+    for (int i = 0; i < 16; i++) {
+      if (float(i) >= uCullCount) break;
+      vec4 c = uCull[i];
+      if (distance(wrapped, c.xy) < c.z) hide = 1.0;
+    }
 
     float tipWeight = uv.y;
 
     // Smooth wind sway.
-    float windWave = sin(uTime * 2.2 + worldPos.x * 0.35 - worldPos.y * 0.2 + aPhase);
-    float windGust = 0.5 + 0.5 * sin(uTime * 0.9 + worldPos.x * 0.12);
+    float windWave = sin(uTime * 2.2 + wrapped.x * 0.35 - wrapped.y * 0.2 + aPhase);
+    float windGust = 0.5 + 0.5 * sin(uTime * 0.9 + wrapped.x * 0.12);
     float swayX = windWave * (0.16 + windGust * 0.14) * tipWeight;
-    float swayZ = cos(uTime * 1.7 + worldPos.y * 0.3 + aPhase) * 0.05 * tipWeight;
+    float swayZ = cos(uTime * 1.7 + wrapped.y * 0.3 + aPhase) * 0.05 * tipWeight;
 
     // Part cleanly around the player's feet.
-    vec2 toBlade = worldPos - uPlayerPos;
+    vec2 toBlade = wrapped - uPlayerPos;
     float dist = length(toBlade);
     float pushStrength = 1.0 - smoothstep(0.2, 2.6, dist);
     vec2 pushDir = dist > 0.001 ? normalize(toBlade) : vec2(1.0, 0.0);
@@ -58,7 +91,17 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
     displaced.z += swayZ + playerBend.y * 0.6;
     displaced.y -= pushStrength * 0.22 * tipWeight;
 
+    // Smooth radial fade toward the wrap seam (24..28 units) so the periodic
+    // ring never pops into view even at maximum zoom-out.
+    float rimFade = 1.0 - smoothstep(24.0, 28.0, dist);
+    displaced *= rimFade;
+
+    // Re-anchor the displaced blade at the wrapped world position.
+    vec3 wrapDelta = vec3(wrapped.x - worldPos.x, 0.0, -(wrapped.y - worldPos.y));
     vec4 worldPosition = modelMatrix * instanceMatrix * vec4(displaced, 1.0);
+    worldPosition.xyz += wrapDelta;
+    worldPosition.xyz *= (1.0 - hide);
+
     gl_Position = projectionMatrix * viewMatrix * worldPosition;
   }
 `;
@@ -91,6 +134,57 @@ const GRASS_FRAGMENT_SHADER = /* glsl */ `
     col *= 0.88 + vTipT * 0.18;
 
     gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const FLOWER_VERTEX_SHADER = /* glsl */ `
+  attribute vec3 aColor;
+
+  uniform vec2 uPlayerPos;
+  uniform float uRing;
+  uniform highp sampler2D uTerrainMap;
+  uniform float uWorldSize;
+  uniform vec4 uCull[16];
+  uniform float uCullCount;
+
+  varying vec3 vColor;
+
+  void main() {
+    vColor = aColor;
+
+    vec4 baseWorld = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+    vec2 worldPos = vec2(baseWorld.x, -baseWorld.z);
+    vec2 rel = mod(worldPos - uPlayerPos + uRing * 0.5, uRing) - uRing * 0.5;
+    vec2 wrapped = uPlayerPos + rel;
+
+    // Fade the speck scale toward the wrap seam so no flower ever pops.
+    float rimFade = 1.0 - smoothstep(24.0, 28.0, length(rel));
+
+    vec2 terrainUv = (wrapped + uWorldSize * 0.5) / uWorldSize;
+    vec4 t = texture2D(uTerrainMap, terrainUv);
+    float edgeDist = (t.r * 255.0 - 128.0) / 128.0 * 8.0; // world-unit SDF
+    float hide = 0.0;
+    if (edgeDist < 0.35) hide = 1.0;
+    if (t.b > 0.55) hide = 1.0;
+    for (int i = 0; i < 16; i++) {
+      if (float(i) >= uCullCount) break;
+      vec4 c = uCull[i];
+      if (distance(wrapped, c.xy) < c.z) hide = 1.0;
+    }
+
+    vec3 delta = vec3(wrapped.x - worldPos.x, 0.0, -(wrapped.y - worldPos.y));
+    vec4 world = modelMatrix * instanceMatrix * vec4(position * rimFade, 1.0);
+    world.xyz += delta;
+    world.xyz *= (1.0 - hide);
+
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+const FLOWER_FRAGMENT_SHADER = /* glsl */ `
+  varying vec3 vColor;
+  void main() {
+    gl_FragColor = vec4(vColor, 1.0);
   }
 `;
 
@@ -136,18 +230,19 @@ function buildFlowerGeometry(): THREE.BufferGeometry {
 /**
  * Razor-sharp depth-tested 3D grass. Blades are crisp thin blue-green quads
  * swaying in the wind and parting around the player, with wildflowers rendered
- * as a separate mesh of tiny non-stretched flat speck quads. Composited over the
- * ASCII pass by the AsciiPostProcess depth prepass.
+ * as a separate mesh of tiny non-stretched flat speck quads. Both wrap around
+ * the player in a fixed ring so the instance budget stays constant regardless
+ * of map size, and both sample the terrain + building exclusions to hide on
+ * water, dirt paths and inside building footprints.
  */
 export class GrassLayer implements IRenderLayer {
   public readonly object3D = new THREE.Group();
   private readonly mesh: THREE.InstancedMesh;
   private readonly flowers: THREE.InstancedMesh;
   private readonly material: THREE.ShaderMaterial;
-  private readonly grassBases: Float32Array;
-  private readonly flowerBases: Float32Array;
+  private readonly flowerMaterial: THREE.ShaderMaterial;
 
-  constructor(terrain: TerrainGrid, count = 59000, areaSize = 55) {
+  constructor(terrain: TerrainGrid, count = 87400, areaSize = 56) {
     const geometry = buildBladeGeometry();
     const flowerGeometry = buildFlowerGeometry();
 
@@ -165,6 +260,8 @@ export class GrassLayer implements IRenderLayer {
 
     // x, y, radius, strength per shadow footprint.
     const darkSpotUniforms = new Float32Array(MAX_DARK_SPOTS * 4);
+    // x, y, radius (w unused) per building exclusion.
+    const cullUniforms = new Float32Array(MAX_EXCLUSIONS * 4);
 
     this.material = new THREE.ShaderMaterial({
       vertexShader: GRASS_VERTEX_SHADER,
@@ -172,6 +269,11 @@ export class GrassLayer implements IRenderLayer {
       uniforms: {
         uTime: { value: 0 },
         uPlayerPos: { value: new THREE.Vector2(0, 0) },
+        uRing: { value: GRASS_RING },
+        uTerrainMap: { value: terrain.texture },
+        uWorldSize: { value: terrain.worldSize },
+        uCull: { value: cullUniforms },
+        uCullCount: { value: 0 },
         uDarkSpots: { value: darkSpotUniforms },
         uDarkCount: { value: 0 },
       },
@@ -184,16 +286,28 @@ export class GrassLayer implements IRenderLayer {
     this.object3D.add(this.mesh);
 
     // Wildflowers: a sparse second instanced mesh of crisp flat speck quads.
-    const flowerMaterial = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+    const flowerCullUniforms = new Float32Array(MAX_EXCLUSIONS * 4);
+    this.flowerMaterial = new THREE.ShaderMaterial({
+      vertexShader: FLOWER_VERTEX_SHADER,
+      fragmentShader: FLOWER_FRAGMENT_SHADER,
+      uniforms: {
+        uPlayerPos: { value: new THREE.Vector2(0, 0) },
+        uRing: { value: GRASS_RING },
+        uTerrainMap: { value: terrain.texture },
+        uWorldSize: { value: terrain.worldSize },
+        uCull: { value: flowerCullUniforms },
+        uCullCount: { value: 0 },
+      },
+      depthTest: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
     const flowerCount = Math.floor(count * 0.012);
-    this.flowers = new THREE.InstancedMesh(flowerGeometry, flowerMaterial, flowerCount);
+    this.flowers = new THREE.InstancedMesh(flowerGeometry, this.flowerMaterial, flowerCount);
     this.flowers.frustumCulled = false;
     this.object3D.add(this.flowers);
 
     const dummy = new THREE.Object3D();
-
-    this.grassBases = new Float32Array(count * 2);
-    this.flowerBases = new Float32Array(flowerCount * 2);
 
     let placed = 0;
     let attempts = 0;
@@ -214,8 +328,6 @@ export class GrassLayer implements IRenderLayer {
       dummy.scale.set(widthScale, heightScale, 1);
       dummy.updateMatrix();
       this.mesh.setMatrixAt(placed, dummy.matrix);
-      this.grassBases[placed * 2] = x;
-      this.grassBases[placed * 2 + 1] = y;
 
       phases[placed] = Math.random() * Math.PI * 2;
 
@@ -238,7 +350,7 @@ export class GrassLayer implements IRenderLayer {
 
     // Place sparse wildflowers: pale moon-white with rare muted ember-orange.
     const flowerDummy = new THREE.Object3D();
-    const flowerColor = new THREE.Color();
+    const flowerColors = new Float32Array(flowerCount * 3);
     let flowerPlaced = 0;
     let flowerAttempts = 0;
     while (flowerPlaced < flowerCount && flowerAttempts < flowerCount * 12) {
@@ -254,15 +366,16 @@ export class GrassLayer implements IRenderLayer {
       flowerDummy.scale.setScalar(0.8 + Math.random() * 0.4);
       flowerDummy.updateMatrix();
       this.flowers.setMatrixAt(flowerPlaced, flowerDummy.matrix);
-      this.flowerBases[flowerPlaced * 2] = x;
-      this.flowerBases[flowerPlaced * 2 + 1] = y;
 
-      flowerColor.setHex(Math.random() < 0.12 ? 0xb06a3a : 0xe8ecf2);
-      this.flowers.setColorAt(flowerPlaced, flowerColor);
+      const warm = Math.random() < 0.12;
+      flowerColors[flowerPlaced * 3 + 0] = warm ? 0xb0 / 255 : 0xee / 255;
+      flowerColors[flowerPlaced * 3 + 1] = warm ? 0x6a / 255 : 0xf6 / 255;
+      flowerColors[flowerPlaced * 3 + 2] = warm ? 0x3a / 255 : 0xff / 255;
 
       flowerPlaced++;
     }
     this.flowers.count = flowerPlaced;
+    flowerGeometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(flowerColors, 3));
     this.flowers.instanceMatrix.needsUpdate = true;
   }
 
@@ -278,64 +391,37 @@ export class GrassLayer implements IRenderLayer {
       value[i * 4 + 3] = s.strength;
     }
     this.material.uniforms.uDarkCount.value = count;
-
-    // Fully cull grass + wildflowers under building footprints so blades never
-    // poke through cottage walls, doors or porches.
-    for (const s of spots) {
-      if (s.cull) this.cullInstancesInside(s.x, s.y, s.radius);
-    }
   }
 
-  /**
-   * Collapse every grass blade and wildflower whose base sits inside a footprint
-   * to a zero-scale degenerate quad, so nothing renders inside the footprint.
-   */
-  private cullInstancesInside(x: number, y: number, radius: number): void {
-    const r2 = radius * radius;
-    const dummy = new THREE.Object3D();
-    let grassChanged = false;
-    let flowerChanged = false;
+  /** Building footprints whose grass blades + wildflowers are hidden entirely. */
+  public setBuildingExclusions(exclusions: GrassExclusion[]): void {
+    this.writeExclusions(this.material, exclusions);
+    this.writeExclusions(this.flowerMaterial, exclusions);
+  }
 
-    for (let i = 0; i < this.mesh.count; i++) {
-      const gx = this.grassBases[i * 2];
-      const gy = this.grassBases[i * 2 + 1];
-      const dx = gx - x;
-      const dy = gy - y;
-      if (dx * dx + dy * dy > r2) continue;
-      dummy.position.set(gx, 0.01, -gy);
-      dummy.rotation.set(0, 0, 0);
-      dummy.scale.set(0, 0, 0);
-      dummy.updateMatrix();
-      this.mesh.setMatrixAt(i, dummy.matrix);
-      grassChanged = true;
+  private writeExclusions(material: THREE.ShaderMaterial, exclusions: GrassExclusion[]): void {
+    const value = material.uniforms.uCull.value as Float32Array;
+    const count = Math.min(exclusions.length, MAX_EXCLUSIONS);
+    for (let i = 0; i < count; i++) {
+      const e = exclusions[i];
+      value[i * 4 + 0] = e.x;
+      value[i * 4 + 1] = e.y;
+      value[i * 4 + 2] = e.radius;
+      value[i * 4 + 3] = 0;
     }
-    if (grassChanged) this.mesh.instanceMatrix.needsUpdate = true;
-
-    for (let i = 0; i < this.flowers.count; i++) {
-      const fx = this.flowerBases[i * 2];
-      const fy = this.flowerBases[i * 2 + 1];
-      const dx = fx - x;
-      const dy = fy - y;
-      if (dx * dx + dy * dy > r2) continue;
-      dummy.position.set(fx, 0.02, -fy);
-      dummy.rotation.set(0, 0, 0);
-      dummy.scale.set(0, 0, 0);
-      dummy.updateMatrix();
-      this.flowers.setMatrixAt(i, dummy.matrix);
-      flowerChanged = true;
-    }
-    if (flowerChanged) this.flowers.instanceMatrix.needsUpdate = true;
+    material.uniforms.uCullCount.value = count;
   }
 
   public update(ctx: FrameContext): void {
     this.material.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
     this.material.uniforms.uTime.value = ctx.elapsed;
+    this.flowerMaterial.uniforms.uPlayerPos.value.set(ctx.playerPos.x, ctx.playerPos.y);
   }
 
   public dispose(): void {
     this.mesh.geometry.dispose();
     this.material.dispose();
     this.flowers.geometry.dispose();
-    (this.flowers.material as THREE.Material).dispose();
+    this.flowerMaterial.dispose();
   }
 }

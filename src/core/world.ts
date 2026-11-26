@@ -18,7 +18,7 @@ export const BOULDERS: Boulder[] = [
 
 // Radius of the playable clearing (in world units). The player is softly
 // clamped to stay inside this circle so the finite ground never shows an edge.
-export const WORLD_BOUNDS = 19;
+export const WORLD_BOUNDS = 62;
 
 // The player's collision radius, used to resolve overlaps with trunks, rocks
 // and boulders.

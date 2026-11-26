@@ -17,6 +17,7 @@ export class InputManager implements IInputManager {
   private mouseNdc: Vec2 = { x: 0, y: 0 };
   private wheelDelta = 0;
   private attackQueued = false;
+  private parryQueued = false;
   private dashQueued = false;
   private interactQueued = false;
   private lightAbilityQueued = false;
@@ -78,6 +79,11 @@ export class InputManager implements IInputManager {
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
     if (event.button === 0) this.attackQueued = true;
+    else if (event.button === 2) this.parryQueued = true;
+  };
+
+  private readonly handleContextMenu = (event: MouseEvent): void => {
+    event.preventDefault();
   };
 
   private readonly handleBlur = (): void => {
@@ -92,6 +98,7 @@ export class InputManager implements IInputManager {
     element.addEventListener('mousemove', this.handleMouseMove);
     element.addEventListener('wheel', this.handleWheel, { passive: false });
     element.addEventListener('pointerdown', this.handlePointerDown);
+    element.addEventListener('contextmenu', this.handleContextMenu);
   }
 
   getState(): InputState {
@@ -123,6 +130,13 @@ export class InputManager implements IInputManager {
   takeAttack(): boolean {
     const value = this.attackQueued;
     this.attackQueued = false;
+    return value;
+  }
+
+  /** True once per parry (right click), then cleared. */
+  consumeParry(): boolean {
+    const value = this.parryQueued;
+    this.parryQueued = false;
     return value;
   }
 
@@ -175,6 +189,7 @@ export class InputManager implements IInputManager {
     this.element.removeEventListener('mousemove', this.handleMouseMove);
     this.element.removeEventListener('wheel', this.handleWheel);
     this.element.removeEventListener('pointerdown', this.handlePointerDown);
+    this.element.removeEventListener('contextmenu', this.handleContextMenu);
     this.pressed.clear();
   }
 }

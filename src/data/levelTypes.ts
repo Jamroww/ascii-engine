@@ -25,6 +25,8 @@ export interface PlacedEntity {
   radius?: number;
   /** Shrine-only: true renders the purified warm-gold state. */
   purified?: boolean;
+  /** Enemy grouping for quest/combat logic (e.g. 'alley', 'patrol', 'boss'). */
+  group?: string;
 }
 
 /** A single circle within an asset's collider footprint, offset from its origin. */

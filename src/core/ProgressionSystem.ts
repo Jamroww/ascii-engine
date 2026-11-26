@@ -1,6 +1,6 @@
 import dialogueData from '../data/dialogue.json';
 
-export type QuestStage = 'not_started' | 'active' | 'upstream_cleared' | 'completed';
+export type QuestStage = 'alley_ambush' | 'speak_survivors' | 'assault_castle' | 'completed';
 
 export interface DialogueEntry {
   speaker: string;
@@ -32,7 +32,7 @@ export class ProgressionSystem {
   virtue = 0;
   readonly absorbedNodeIds = new Set<string>();
   readonly purifiedShrineIds = new Set<string>();
-  questStage: QuestStage = 'not_started';
+  questStage: QuestStage = 'alley_ambush';
 
   private healHandler: ((amount: number) => void) | null = null;
 
@@ -72,7 +72,7 @@ export class ProgressionSystem {
     this.virtue = 0;
     this.absorbedNodeIds.clear();
     this.purifiedShrineIds.clear();
-    this.questStage = 'not_started';
+    this.questStage = 'alley_ambush';
   }
 
   private selectBucket(): DialogueBucket {
@@ -82,10 +82,10 @@ export class ProgressionSystem {
     switch (this.questStage) {
       case 'completed':
         return corruptionDominant ? 'quest_cleared_poison' : 'quest_cleared_light';
-      case 'active':
-      case 'upstream_cleared':
+      case 'alley_ambush':
+      case 'speak_survivors':
+      case 'assault_castle':
         return 'quest_active';
-      case 'not_started':
       default:
         if (this.corruption >= 30 && corruptionDominant) return 'high_corruption';
         if (this.virtue >= 30 && virtueDominant) return 'high_virtue';

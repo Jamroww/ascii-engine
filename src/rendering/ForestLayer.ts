@@ -268,10 +268,10 @@ export function generateRiversideForest(terrain: TerrainGrid, seed = 42): TreePl
     return false;
   };
 
-  const PERIMETER_MIN = 17;
-  const PERIMETER_MAX = 29;
+  const PERIMETER_MIN = 46;
+  const PERIMETER_MAX = 60;
 
-  for (let i = 0; i < 2000 && placements.length < 90; i++) {
+  for (let i = 0; i < 4000 && placements.length < 260; i++) {
     const r = Math.sqrt(rand()) * (PERIMETER_MAX - PERIMETER_MIN) + PERIMETER_MIN;
     const a = rand() * Math.PI * 2;
     const x = Math.cos(a) * r;

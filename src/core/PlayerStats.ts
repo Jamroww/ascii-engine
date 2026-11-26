@@ -114,6 +114,12 @@ export class PlayerStats {
     return true;
   }
 
+  /** Refund stamina (e.g. a successful parry) without exceeding the cap. */
+  restoreStamina(amount: number): void {
+    if (amount <= 0 || this.stamina <= 0) return;
+    this.stamina = Math.min(this.maxStamina, this.stamina + amount);
+  }
+
   /** Start a dash if cooldown + stamina allow; returns true when it began. */
   tryStartDash(): boolean {
     if (this.dashCooldown > 0 || this.dashActive) return false;

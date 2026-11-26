@@ -212,6 +212,11 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
     vec3 blightCol = mix(vec3(0.025, 0.22, 0.045), vec3(0.18, 0.025, 0.34), swirl) * (0.75 + 0.5 * swirl);
     col = mix(col, blightCol, blight * 0.65);
 
+    // --- Subtle depth darkening in the deep southern harbor bay ---
+    float deepBay = 1.0 - smoothstep(-8.0, -6.0, edgeDist);
+    float southern = 1.0 - smoothstep(-20.0, -6.0, vWorld.y);
+    col *= 1.0 - deepBay * southern * 0.38;
+
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -316,8 +321,9 @@ export class WaterLayer implements IRenderLayer {
   private readonly terrain: TerrainGrid;
   private prevX = 0;
   private prevY = 0;
+  private allLights: WaterLight[] = [];
 
-  constructor(terrain: TerrainGrid, areaSize = 60) {
+  constructor(terrain: TerrainGrid, areaSize?: number) {
     this.terrain = terrain;
 
     const lightUniforms = new Float32Array(MAX_WATER_LIGHTS * 4);
@@ -347,7 +353,7 @@ export class WaterLayer implements IRenderLayer {
     this.material.uniforms.uMoonTex.value = createMoonCanvasTexture();
     loadMoonPng(this.material.uniforms.uMoonTex);
 
-    const geometry = new THREE.PlaneGeometry(areaSize, areaSize);
+    const geometry = new THREE.PlaneGeometry(areaSize ?? terrain.worldSize, areaSize ?? terrain.worldSize);
     this.object3D = new THREE.Mesh(geometry, this.material);
     this.object3D.rotation.x = -Math.PI / 2;
     this.object3D.position.y = -0.05;
@@ -355,16 +361,7 @@ export class WaterLayer implements IRenderLayer {
   }
 
   public setLights(lights: WaterLight[]): void {
-    const value = this.material.uniforms.uLights.value as Float32Array;
-    const count = Math.min(lights.length, MAX_WATER_LIGHTS);
-    for (let i = 0; i < count; i++) {
-      const l = lights[i];
-      value[i * 4 + 0] = l.x;
-      value[i * 4 + 1] = l.y;
-      value[i * 4 + 2] = l.radius;
-      value[i * 4 + 3] = l.intensity;
-    }
-    this.material.uniforms.uLightCount.value = count;
+    this.allLights = lights;
   }
 
   public setPlayerReflection(
@@ -390,6 +387,26 @@ export class WaterLayer implements IRenderLayer {
     this.material.uniforms.uPlayerPos.value.set(px, py);
     this.material.uniforms.uPlayerVel.value.set(vx, vy);
     this.material.uniforms.uPlayerInRiver.value = this.terrain.isInRiver(px, py) ? 1 : 0;
+
+    // Sort and cap to the 8 closest warm lights so the fragment shader never
+    // exceeds its light limit as the player crosses the wide Act 1 map.
+    const sorted = [...this.allLights]
+      .sort((a, b) => {
+        const da = (a.x - px) * (a.x - px) + (a.y - py) * (a.y - py);
+        const db = (b.x - px) * (b.x - px) + (b.y - py) * (b.y - py);
+        return da - db;
+      })
+      .slice(0, MAX_WATER_LIGHTS);
+
+    const value = this.material.uniforms.uLights.value as Float32Array;
+    for (let i = 0; i < sorted.length; i++) {
+      const l = sorted[i];
+      value[i * 4 + 0] = l.x;
+      value[i * 4 + 1] = l.y;
+      value[i * 4 + 2] = l.radius;
+      value[i * 4 + 3] = l.intensity;
+    }
+    this.material.uniforms.uLightCount.value = sorted.length;
   }
 
   public dispose(): void {

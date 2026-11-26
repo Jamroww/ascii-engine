@@ -86,13 +86,112 @@ function pathMaskByte(x: number, y: number): number {
   return PATH_WILD;
 }
 
+// --- Act 1: Harbor-to-Castle layout (128x128) -------------------------------
+
+const HARBOR = { cx: -4, cy: -40, radius: 34 } as const;
+
+/** Pier landing: a narrow walkable strip jutting south from the village shore. */
+const PIER = { cx: 2, halfW: 2.2, yTop: -6, yBottom: -22 } as const;
+
+function harborSDF(x: number, y: number): number {
+  return Math.hypot(x - HARBOR.cx, y - HARBOR.cy) - HARBOR.radius;
+}
+
+/** Winding north-east river: source top-right, S-curves into the bay's east edge. */
+function act1RiverCenterX(y: number): number {
+  const t = clamp((y + 22) / 86, 0, 1);
+  const base = 13 + 21 * t;
+  const wiggle = (Math.sin(y * 0.1) * 5.0 + Math.cos(y * 0.05) * 2.5) * smoothstep(0, 1, t);
+  return base + wiggle;
+}
+
+function act1RiverHalfWidth(y: number): number {
+  return 2.5 + Math.sin(y * 0.18) * 0.35;
+}
+
+function act1RiverSDF(x: number, y: number): number {
+  return Math.abs(x - act1RiverCenterX(y)) - act1RiverHalfWidth(y);
+}
+
+function pierLandSDF(x: number, y: number): number {
+  const dx = Math.max(Math.abs(x - PIER.cx) - PIER.halfW, 0);
+  const dy = Math.max(Math.max(PIER.yBottom - y, y - PIER.yTop), 0);
+  return Math.hypot(dx, dy);
+}
+
+/** Union of harbor bay + river; the pier strip is carved out into dry land. */
+function act1WaterSDF(x: number, y: number): number {
+  const water = Math.min(harborSDF(x, y), act1RiverSDF(x, y));
+  if (pierLandSDF(x, y) < 1.0) return Math.max(water, 1.0 - pierLandSDF(x, y) + 0.2);
+  return water;
+}
+
+/** Strong toxic Blight along the upper river and bridge approach (y > +16). */
+function act1BlightByte(x: number, y: number): number {
+  const upstream = smoothstep(16, 36, y);
+  const nearRiver = 1.0 - smoothstep(2.0, 8.0, Math.abs(act1RiverSDF(x, y)));
+  const v = upstream * (0.72 + 0.28 * nearRiver) * (0.9 + 0.1 * Math.sin(x * 0.4 - y * 0.3));
+  return Math.round(clamp(v, 0, 1) * 255);
+}
+
+// Footpath waypoints: pier -> NW alley -> survivor clearing -> NE river -> bridge -> castle.
+const ACT1_PATH: ReadonlyArray<readonly [number, number]> = [
+  [2, -20],
+  [-2, -8],
+  [-12, -4],
+  [-22, 2],
+  [-28, 10],
+  [-20, 22],
+  [0, 30],
+  [14, 36],
+  [20, 44],
+  [26, 48],
+];
+
+function pointSegmentDist(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const apx = px - ax;
+  const apy = py - ay;
+  const lenSq = abx * abx + aby * aby;
+  const t = lenSq > 0 ? clamp((apx * abx + apy * aby) / lenSq, 0, 1) : 0;
+  return Math.hypot(px - (ax + abx * t), py - (ay + aby * t));
+}
+
+function act1PathDist(x: number, y: number): number {
+  let best = Infinity;
+  for (let i = 1; i < ACT1_PATH.length; i++) {
+    const [ax, ay] = ACT1_PATH[i - 1];
+    const [bx, by] = ACT1_PATH[i];
+    best = Math.min(best, pointSegmentDist(x, y, ax, ay, bx, by));
+  }
+  return best;
+}
+
+function act1PathMaskByte(x: number, y: number): number {
+  const d = act1PathDist(x, y);
+  if (d < 1.5) return PATH_DIRT;
+  if (d < 3.5) return PATH_CLEARED;
+  // Open survivor clearing (north-west) + castle courtyard (north-east).
+  if (Math.hypot(x + 28, y - 10) < 9) return PATH_CLEARED;
+  if (Math.hypot(x - 26, y - 48) < 8) return PATH_CLEARED;
+  return PATH_WILD;
+}
+
 export class TerrainGrid {
   public readonly resolution: number;
   public readonly worldSize: number;
   public readonly data: Uint8Array;
   public readonly texture: THREE.DataTexture;
 
-  constructor(resolution = 128, worldSize = 60) {
+  constructor(resolution = 512, worldSize = 128) {
     this.resolution = resolution;
     this.worldSize = worldSize;
     this.data = new Uint8Array(resolution * resolution * 4);
@@ -253,6 +352,31 @@ export class TerrainGrid {
           smoothstep(6.5, 16.0, wy + Math.sin(wx * 0.5) * 1.6) * 255
         );
         grid.data[grid.index(ix, iy, 2)] = pathMaskByte(wx, wy);
+        grid.data[grid.index(ix, iy, 3)] = 0;
+      }
+    }
+
+    grid.texture.needsUpdate = true;
+    return grid;
+  }
+
+  /**
+   * Bake the Act 1 harbor-to-castle topology: a south-center semicircular harbor
+   * bay, a winding north-east river, the blighted upstream approach, and the
+   * footpath threading pier -> alley -> clearing -> bridge -> castle.
+   */
+  public static bakeAct1Harbor(resolution = 512, worldSize = 128): TerrainGrid {
+    const grid = new TerrainGrid(resolution, worldSize);
+    const half = worldSize / 2;
+
+    for (let iy = 0; iy < resolution; iy++) {
+      const wy = ((iy + 0.5) / resolution) * worldSize - half;
+      for (let ix = 0; ix < resolution; ix++) {
+        const wx = ((ix + 0.5) / resolution) * worldSize - half;
+
+        grid.data[grid.index(ix, iy, 0)] = TerrainGrid.encodeSdf(act1WaterSDF(wx, wy));
+        grid.data[grid.index(ix, iy, 1)] = act1BlightByte(wx, wy);
+        grid.data[grid.index(ix, iy, 2)] = act1PathMaskByte(wx, wy);
         grid.data[grid.index(ix, iy, 3)] = 0;
       }
     }

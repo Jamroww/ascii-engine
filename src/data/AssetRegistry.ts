@@ -25,6 +25,7 @@ import {
   createWiltedTree,
   type TreeAsset,
 } from '../rendering/ForestLayer';
+import { LANDMARK_PROP_MODEL_FACTORIES } from '../rendering/Lvl1';
 import type { ColliderSpec, EntityKind } from './levelTypes';
 
 type BuildingFactory = () => BuildingAsset;
@@ -91,7 +92,7 @@ const enemyAssets = new Map<string, EnemyArchetype>([
       radius: 0.7,
       aggroRange: 7,
       attackRange: 1.3,
-      telegraphTime: 0.35,
+      telegraphTime: 0.38,
       attackCooldown: 0.9,
       damage: 12,
       kind: 'melee',
@@ -124,6 +125,21 @@ const enemyAssets = new Map<string, EnemyArchetype>([
       telegraphTime: 0.55,
       attackCooldown: 1.6,
       damage: 20,
+      kind: 'melee',
+    },
+  ],
+  [
+    'castle_warden',
+    {
+      id: 'castle_warden',
+      maxHp: 260,
+      speed: 2.8,
+      radius: 1.1,
+      aggroRange: 10,
+      attackRange: 2.0,
+      telegraphTime: 0.38,
+      attackCooldown: 1.5,
+      damage: 24,
       kind: 'melee',
     },
   ],
@@ -189,6 +205,43 @@ const modelAssets = new Map<string, ModelAssetEntry>([
   // Progression
   ['poison_node', { kind: 'node', factory: PROGRESSION_MODEL_FACTORIES.poison_node, radius: 1.0 }],
   ['light_shrine', { kind: 'shrine', factory: PROGRESSION_MODEL_FACTORIES.light_shrine, radius: 1.0 }],
+  // Act 1 landmark props (Lvl1.ts)
+  [
+    'castle_gatehouse',
+    {
+      kind: 'building',
+      factory: LANDMARK_PROP_MODEL_FACTORIES.castle_gatehouse,
+      radius: 0,
+      colliders: [
+        { offsetX: -3.15, offsetY: 0, radius: 1.6 },
+        { offsetX: 3.15, offsetY: 0, radius: 1.6 },
+      ],
+    },
+  ],
+  [
+    'castle_watchtower',
+    {
+      kind: 'building',
+      factory: LANDMARK_PROP_MODEL_FACTORIES.castle_watchtower,
+      radius: 1.6,
+    },
+  ],
+  [
+    'fishing_boat',
+    {
+      kind: 'prop',
+      factory: LANDMARK_PROP_MODEL_FACTORIES.fishing_boat,
+      radius: 2.1,
+    },
+  ],
+  [
+    'alley_barricade',
+    {
+      kind: 'prop',
+      factory: LANDMARK_PROP_MODEL_FACTORIES.alley_barricade,
+      radius: 1.4,
+    },
+  ],
 ]);
 
 export class AssetRegistry {

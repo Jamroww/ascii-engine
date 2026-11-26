@@ -2,19 +2,19 @@
   "npc_ferryman": {
     "speaker": "The Ferryman",
     "default": [
-      "Evening, traveler. You'd be the Wilted Flower, then — the one they whisper about on the bank.",
-      "The river's sick. Blight chokes the upstream bend, and the fish die belly-up in the reeds.",
-      "Clear the upstream Blight for me and I'll pole you across. It's the only road north."
+      "Evening, traveler. You came in on the black water — most who drift ashore here don't keep walking.",
+      "The harbor's gone wrong. Whatever followed your boat is already up in the alley, hunting.",
+      "Push through to the clearing. The survivors are gathered there, and they'll know more than I do."
     ],
     "quest_active": [
-      "The taint thickens where the river bends north. Clear the Blight that chokes it.",
-      "Mind the Poison Nodes — they feed the sickness. The old Light Shrines may still guard you."
+      "The alley's behind you. Rest a moment — the survivors will want to hear what you saw on the water.",
+      "Speak with the Elder. If you mean to go north, the river road and the old bridge are the only way."
     ],
     "quest_cleared_light": [
-      "The water runs clean again. The Light you carried kept the dark at bay, traveler."
+      "The Warden is ash and the harbor breathes again. The Light you carried kept the dark from taking the whole coast."
     ],
     "quest_cleared_poison": [
-      "The water runs clean again… though something in your eyes has grown colder than the river."
+      "The Warden is dead, but you came back soaked in the same green the river coughed up. I'll pole you anywhere, but… mind it doesn't carry you."
     ],
     "high_corruption": [
       "You carry the Blight now, like driftwood soaked through. Careful it doesn't carry you."
@@ -27,17 +27,17 @@
     "speaker": "The Lantern Keeper",
     "default": [
       "A lamp for the lost. That's all I keep out here on the water's edge.",
-      "The dark out past the village isn't empty, traveler. It watches. Keep your lantern close."
+      "The dark past the alley isn't empty, traveler. It watches. Keep your lantern close."
     ],
     "quest_active": [
-      "You're after the upstream Blight, aren't you? Then don't let your light gutter out.",
+      "You're bound for the castle, aren't you? Then don't let your light gutter out on the bridge.",
       "The Shrines were lit long before the Blight came. Some of their warmth still waits to be woken."
     ],
     "quest_cleared_light": [
-      "You brought the light back. The river has its shine again — I can feel it from here."
+      "You brought the light back. The harbor has its shine again — I can feel it from here."
     ],
     "quest_cleared_poison": [
-      "The river is clear… but your lamp burns a stranger color now. Mind the wick."
+      "The Warden is gone… but your lamp burns a stranger color now. Mind the wick."
     ],
     "high_corruption": [
       "Your lantern gutters green. I've only ever seen that in the things that crawl out of the Blight."
@@ -49,11 +49,11 @@
   "npc_herbalist": {
     "speaker": "The Herbalist",
     "default": [
-      "Sit. Breathe. The marsh reeks worse than usual — that's the Blight pushing south.",
+      "Sit. Breathe. The marsh reeks worse than usual — that's the Blight pushing south from the river.",
       "I gather what I can before the rot takes the roots. Not much clean medicine left up here."
     ],
     "quest_active": [
-      "If you're wading upstream, take care — the Blight doesn't just poison the water, it poisons the blood.",
+      "If you're crossing the bridge, take care — the Warden doesn't just poison the water, it poisons the blood.",
       "A Poison Node is a festering wound in the earth. Absorb it and you carry its sickness in your own veins."
     ],
     "quest_cleared_light": [
@@ -73,11 +73,11 @@
     "speaker": "The Elder",
     "default": [
       "The village remembers when the river ran clear and the shrine-lights burned till dawn.",
-      "Now the Shrines sleep cold and the young ones forget why we ever lit them at all."
+      "Now the Shrines sleep cold and the Warden walks the old castle courtyard, and the young forget why we lit them at all."
     ],
     "quest_active": [
       "So the Ferryman has set you to the old work. Good. Someone must remember it.",
-      "Purify a Shrine and its warmth returns to the water. That is the old bargain, kept."
+      "Purify a Shrine and its warmth returns to the water. Then cross the bridge and end what guards the castle."
     ],
     "quest_cleared_light": [
       "You have restored the old warmth. The village owes you more than it knows how to say."
@@ -96,14 +96,14 @@
     "speaker": "Your Sibling",
     "default": [
       "You came back. I told them you would.",
-      "Don't wander too far upriver alone. Last time… last time the water kept what it took."
+      "Don't wander upriver alone. Last time… last time the water kept what it took."
     ],
     "quest_active": [
-      "You're going to the upstream bend? Then I'm coming with you as far as the shallows.",
+      "You're going to the castle? Then I'm coming with you as far as the bridge.",
       "Be careful around the Poison Nodes. I've seen what they do to hands that get too close."
     ],
     "quest_cleared_light": [
-      "You did it. The water's clear again — I can see the stones at the bottom, like when we were small."
+      "You did it. The Warden's gone — I can see the stones at the bottom of the harbor again, like when we were small."
     ],
     "quest_cleared_poison": [
       "You're different now. I'm glad you're back… but I miss the way you used to laugh."

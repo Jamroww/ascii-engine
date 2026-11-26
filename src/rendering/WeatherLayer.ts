@@ -82,10 +82,10 @@ export class WeatherLayer implements IRenderLayer {
   public readonly object3D: THREE.InstancedMesh;
   private readonly material: THREE.ShaderMaterial;
 
-  constructor(atlas: GlyphAtlas, rainCount = 360, sporeCount = 80, petalCount = 40) {
+  constructor(atlas: GlyphAtlas, rainCount = 760, sporeCount = 170, petalCount = 85) {
     const total = rainCount + sporeCount + petalCount;
-    const boundsX = 42;
-    const boundsY = 26;
+    const boundsX = 48;
+    const boundsY = 48;
 
     const geometry = new THREE.PlaneGeometry(0.42, 0.72);
     const offsets = new Float32Array(total * 3);

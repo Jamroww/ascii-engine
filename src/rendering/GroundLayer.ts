@@ -97,7 +97,7 @@ export class GroundLayer implements IRenderLayer {
   public readonly object3D: THREE.Mesh;
   private readonly material: THREE.ShaderMaterial;
 
-  constructor(terrain: TerrainGrid, areaSize = 60) {
+  constructor(terrain: TerrainGrid, areaSize?: number) {
     this.material = new THREE.ShaderMaterial({
       vertexShader: GROUND_VERTEX_SHADER,
       fragmentShader: GROUND_FRAGMENT_SHADER,
@@ -109,7 +109,7 @@ export class GroundLayer implements IRenderLayer {
       depthWrite: false,
     });
 
-    const geometry = new THREE.PlaneGeometry(areaSize, areaSize);
+    const geometry = new THREE.PlaneGeometry(areaSize ?? terrain.worldSize, areaSize ?? terrain.worldSize);
     this.object3D = new THREE.Mesh(geometry, this.material);
     this.object3D.rotation.x = -Math.PI / 2;
     this.object3D.position.y = 0;

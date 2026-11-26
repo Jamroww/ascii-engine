@@ -5,8 +5,10 @@ import type { ColliderSpec, EntityKind } from '../data/levelTypes';
 import { setLightShrinePurified as applyShrinePurified } from './Progression';
 import { disposeModelTree, setCastShadow, setReceiveShadow } from './modelUtils';
 
-/** Maximum warm/toxic point lights spawned per placed entity. */
-const MAX_ENTITY_LIGHTS = 6;
+/** Fixed reusable pool of warm/toxic point lights shared by the whole world. */
+const POOL_SIZE = 6;
+/** Maximum emissive light points sampled per placed model. */
+const MAX_SOURCES_PER_ENTRY = 6;
 
 /** A single placed 3D model ready for the world layer. */
 export interface WorldModelPlacement {
@@ -20,23 +22,30 @@ export interface WorldModelPlacement {
   colliders?: ColliderSpec[];
 }
 
-interface EntityLight {
-  light: THREE.PointLight;
-  base: number;
+/** A world-space emissive light point sampled from a model's glowing parts. */
+interface LightSource {
+  x: number;
+  y: number;
+  /** Height above the ground plane. */
+  h: number;
+  color: THREE.Color;
+  intensity: number;
+  distance: number;
 }
 
 interface WorldModelEntry {
   placement: WorldModelPlacement;
   model: THREE.Group;
-  lights: EntityLight[];
+  sources: LightSource[];
   absorbed: boolean;
 }
 
 /**
  * Instantiates real 3D `THREE.Group` models (buildings, NPCs, poison nodes and
  * light shrines, plus curated hero props) directly in the world scene at
- * `(x, 0, -y)`. Small warm/toxic point lights ride the emissive parts of each
- * model so the screen-space ASCII pass naturally produces soft gradient glows.
+ * `(x, 0, -y)`. Instead of spawning a light per emissive part, a fixed pool of
+ * 6 `THREE.PointLight`s is reassigned each frame to the 6 closest active light
+ * sources to the player, so the lighting budget never scales with the map.
  */
 export class WorldModelsLayer implements IRenderLayer {
   public readonly object3D = new THREE.Group();
@@ -44,8 +53,22 @@ export class WorldModelsLayer implements IRenderLayer {
   private entries: WorldModelEntry[] = [];
   private highlightId: string | null = null;
 
+  private readonly pool: THREE.PointLight[] = [];
+  private readonly poolIntensity: number[] = [];
+
   constructor(placements: WorldModelPlacement[]) {
     this.object3D.userData.isWorldReflection = true;
+
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const light = new THREE.PointLight(0xff9900, 0, 5.5, 2);
+      // Always visible so the WebGL point-light count (and therefore the shader
+      // program) stays constant; unused slots simply fade to intensity 0.
+      light.visible = true;
+      this.pool.push(light);
+      this.poolIntensity.push(0);
+      this.object3D.add(light);
+    }
+
     this.rebuild(placements);
   }
 
@@ -55,6 +78,9 @@ export class WorldModelsLayer implements IRenderLayer {
     this.object3D.clear();
     this.entries = [];
     this.highlightId = null;
+
+    // Re-add the light pool (it was cleared above).
+    for (const light of this.pool) this.object3D.add(light);
 
     for (const placement of placements) {
       const entry = this.buildEntry(placement);
@@ -86,7 +112,9 @@ export class WorldModelsLayer implements IRenderLayer {
 
     entry.placement.purified = purified;
     applyShrinePurified(entry.model, purified);
-    this.rebuildEntryLights(entry);
+    // Re-sample the emissive points so the pooled light picks up the warm-gold
+    // purified glow instead of the dormant cold-stone colour.
+    entry.sources = collectEmissiveSources(entry.model, MAX_SOURCES_PER_ENTRY);
   }
 
   /** Dim + desaturate a poison node so it clearly reads as spent/absorbed. */
@@ -102,10 +130,6 @@ export class WorldModelsLayer implements IRenderLayer {
         mat.emissiveIntensity = absorbed ? 0.15 : 1.5;
       }
     });
-
-    for (const l of entry.lights) {
-      l.light.intensity = absorbed ? 0 : l.base;
-    }
   }
 
   /** Brighten the glow of the nearest in-range interactable (or clear it). */
@@ -114,27 +138,61 @@ export class WorldModelsLayer implements IRenderLayer {
   }
 
   public update(ctx: FrameContext): void {
+    const px = ctx.playerPos.x;
+    const py = ctx.playerPos.y;
+    const dt = ctx.dt > 0 ? ctx.dt : 1 / 60;
+
+    const candidates: Array<{
+      source: LightSource;
+      factor: number;
+      distSq: number;
+    }> = [];
+
     for (const entry of this.entries) {
       const p = entry.placement;
-      const highlighted = this.highlightId === p.id;
-
-      for (const l of entry.lights) {
-        let intensity = l.base;
-        if (p.kind === 'node' && !entry.absorbed) {
-          intensity *= 0.8 + 0.2 * Math.sin(ctx.elapsed * 2.5 + p.x * 1.1);
-        } else if (p.kind === 'shrine' && p.purified) {
-          intensity *= 0.92 + 0.08 * Math.sin(ctx.elapsed * 2.2);
-        } else if (p.kind === 'npc') {
-          intensity *= 0.94 + 0.06 * Math.sin(ctx.elapsed * 3.1 + p.y * 0.7);
-        }
-        if (highlighted) intensity *= 1.6;
-        l.light.intensity = intensity;
+      let factor = 1;
+      if (p.kind === 'node' && !entry.absorbed) {
+        factor *= 0.8 + 0.2 * Math.sin(ctx.elapsed * 2.5 + p.x * 1.1);
+      } else if (p.kind === 'shrine' && p.purified) {
+        factor *= 0.92 + 0.08 * Math.sin(ctx.elapsed * 2.2);
+      } else if (p.kind === 'npc') {
+        factor *= 0.94 + 0.06 * Math.sin(ctx.elapsed * 3.1 + p.y * 0.7);
       }
+      if (this.highlightId === p.id) factor *= 1.6;
+
+      for (const source of entry.sources) {
+        const dx = source.x - px;
+        const dy = source.y - py;
+        candidates.push({ source, factor, distSq: dx * dx + dy * dy });
+      }
+    }
+
+    candidates.sort((a, b) => a.distSq - b.distSq);
+    const top = candidates.slice(0, POOL_SIZE);
+
+    for (let i = 0; i < POOL_SIZE; i++) {
+      const light = this.pool[i];
+      const candidate = top[i];
+
+      const target = candidate ? candidate.source.intensity * candidate.factor : 0;
+      // Smoothly fade between reassignments so a light never pops on/off.
+      const k = 1 - Math.exp(-8 * dt);
+      this.poolIntensity[i] += (target - this.poolIntensity[i]) * k;
+
+      if (candidate) {
+        const s = candidate.source;
+        light.color.copy(s.color);
+        light.distance = s.distance;
+        light.position.set(s.x, s.h, -s.y);
+      }
+
+      light.intensity = this.poolIntensity[i];
     }
   }
 
   public dispose(): void {
     this.disposeEntries();
+    for (const light of this.pool) light.dispose();
     this.object3D.clear();
   }
 
@@ -147,27 +205,12 @@ export class WorldModelsLayer implements IRenderLayer {
     setReceiveShadow(model, true);
     liftWorldModelMaterials(model, placement.kind);
 
-    const entry: WorldModelEntry = {
+    return {
       placement,
       model,
-      lights: [],
+      sources: collectEmissiveSources(model, MAX_SOURCES_PER_ENTRY),
       absorbed: false,
     };
-    this.rebuildEntryLights(entry);
-    return entry;
-  }
-
-  private rebuildEntryLights(entry: WorldModelEntry): void {
-    for (const l of entry.lights) entry.model.remove(l.light);
-    entry.lights = [];
-
-    const emissives = collectEmissiveLights(entry.model, MAX_ENTITY_LIGHTS);
-    for (const e of emissives) {
-      const light = new THREE.PointLight(e.color.getHex(), e.intensity, e.distance, 2);
-      light.position.copy(e.position);
-      entry.model.add(light);
-      entry.lights.push({ light, base: e.intensity });
-    }
   }
 
   private disposeEntries(): void {
@@ -178,20 +221,11 @@ export class WorldModelsLayer implements IRenderLayer {
   }
 }
 
-/** Local emissive light points sampled from a model's `userData.isEmissive` meshes. */
-function collectEmissiveLights(
-  model: THREE.Group,
-  maxCount: number,
-): Array<{ position: THREE.Vector3; color: THREE.Color; intensity: number; distance: number }> {
+/** World-space emissive light points sampled from a model's `userData.isEmissive` meshes. */
+function collectEmissiveSources(model: THREE.Group, maxCount: number): LightSource[] {
   model.updateMatrixWorld(true);
   const world = new THREE.Vector3();
-  const local = new THREE.Vector3();
-  const out: Array<{
-    position: THREE.Vector3;
-    color: THREE.Color;
-    intensity: number;
-    distance: number;
-  }> = [];
+  const out: LightSource[] = [];
 
   model.traverse((node) => {
     if (out.length >= maxCount) return;
@@ -199,12 +233,12 @@ function collectEmissiveLights(
     const mat = node.material;
     if (!(mat instanceof THREE.MeshStandardMaterial)) return;
 
-    // Lights are parented to the model, so resolve world -> model-local coords.
     node.getWorldPosition(world);
-    model.worldToLocal(local.copy(world));
     const color = mat.emissive.getHex() !== 0x000000 ? mat.emissive : mat.color;
     out.push({
-      position: local.clone(),
+      x: world.x,
+      y: -world.z,
+      h: world.y,
       color: color.clone(),
       intensity: 1.4,
       distance: 5.5,
@@ -241,7 +275,10 @@ function liftWorldModelMaterials(model: THREE.Group, kind: EntityKind): void {
         const hsl = { h: 0, s: 0, l: 0 };
         mat.color.getHSL(hsl);
         if (hsl.l > 0.4) {
-          mat.color.offsetHSL(0, 0, 0.08);
+          // Bright stone / plaster / roof-trim reads silver-slate: lift the
+          // lightness and pull a touch of saturation out so lit masonry reads
+          // crisp against the pitch-black shadow faces.
+          mat.color.offsetHSL(0, -0.05, 0.1);
         }
       }
     }

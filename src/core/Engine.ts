@@ -35,6 +35,15 @@ const RADIANT_HEAL = 25;
 const RADIANT_STUN_DURATION = 1.2;
 const RADIANT_BURST_DURATION = 2.5;
 
+// Right-click parry tuning.
+const PARRY_COOLDOWN = 0.55;
+const PARRY_WINDOW = 0.30;
+const PARRY_STAMINA_COST = 10;
+const PARRY_SUCCESS_COOLDOWN = 0.15;
+const PARRY_STAMINA_REFUND = 35;
+const PARRY_FLASH_DURATION = 0.1;
+const BOSS_AGGRO_RANGE = 22;
+
 // Tilted 3/4 camera framing: high above and to the south, looking down-north.
 // A ~38 degree elevation (19 up / 24 back) shows front walls, doorways, warm
 // windows, porches and upright NPCs instead of mostly dark rooftops.
@@ -95,7 +104,7 @@ export class Engine {
   private readonly ndcVec = new THREE.Vector2();
   private readonly hitVec = new THREE.Vector3();
 
-  private viewHeight = 22;
+  private viewHeight = 14.5;
   private editorMode = false;
   public readonly playerPos = new THREE.Vector2(0, 0);
   private readonly clock = new THREE.Clock();
@@ -124,6 +133,18 @@ export class Engine {
   private dialogueOpen = false;
   private inventoryOpen = false;
   private currentInteract: PlacedEntity | null = null;
+
+  // Parry state + live aim direction (world space) for projectile deflects.
+  private parryCooldown = 0;
+  private parryActiveTimer = 0;
+  private parryFlashTimer = 0;
+  public aimX = 0;
+  public aimY = 1;
+
+  // Directional camera punch (decays quickly) + lazily-created clang synth.
+  private punchX = 0;
+  private punchZ = 0;
+  private audioContext: AudioContext | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -179,7 +200,7 @@ export class Engine {
     // them (a per-frame GPU cost that caused movement stutter).
     this.renderer.shadowMap.autoUpdate = false;
 
-    this.moonLight = new THREE.DirectionalLight(0xdce8ff, 2.7);
+    this.moonLight = new THREE.DirectionalLight(0xe2eeff, 3.0);
     this.moonLight.position.set(-16, 28, 16);
     this.moonLight.castShadow = true;
     this.moonLight.shadow.mapSize.set(SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
@@ -200,7 +221,7 @@ export class Engine {
 
     // Almost no ambient fill: unlit sides of trees/rocks/buildings drop into
     // pure black, letting the directional moonlight carve the chiaroscuro.
-    this.hemiLight = new THREE.HemisphereLight(0x7c98b8, 0x1b2822, 0.28);
+    this.hemiLight = new THREE.HemisphereLight(0x7c98b8, 0x1b2822, 0.34);
     this.scene.add(this.hemiLight);
 
     // Soft, tight physically-decaying warm hip lantern (never washes the ground).
@@ -271,6 +292,101 @@ export class Engine {
     this.spawnPoint.set(x, y);
   }
 
+  /** Show a transient toast banner (used by level load + quest beats). */
+  public showToast(text: string): void {
+    this.hud.showToast(text);
+  }
+
+  /** True while the player's active parry window is open. */
+  public isParryActive(): boolean {
+    return this.parryActiveTimer > 0;
+  }
+
+  /** Parry payoff: refund stamina, cut cooldown, hitstop + camera punch + flash. */
+  public onParrySuccess(): void {
+    this.stats.restoreStamina(PARRY_STAMINA_REFUND);
+    this.parryCooldown = Math.min(this.parryCooldown, PARRY_SUCCESS_COOLDOWN);
+    this.triggerHitstop(0.08);
+    this.triggerShake(0.3, 0.16);
+    this.parryFlashTimer = PARRY_FLASH_DURATION;
+  }
+
+  /** Melee-only parry payoff: directional camera punch + synthesized clang. */
+  public onMeleeParry(dirX: number, dirY: number): void {
+    this.triggerCameraPunch(dirX, dirY, 0.5);
+    this.playParryClang();
+  }
+
+  /** Nudge the camera in a fixed world direction, decaying over a few frames. */
+  public triggerCameraPunch(dirX: number, dirY: number, amount: number): void {
+    this.punchX += dirX * amount;
+    this.punchZ += -dirY * amount;
+  }
+
+  /**
+   * Synthesized metallic sword clang (Web Audio). Created lazily on the first
+   * parry so the AudioContext initialises inside a real user gesture; no
+   * external audio assets are required.
+   */
+  private playParryClang(): void {
+    try {
+      if (!this.audioContext) {
+        const Ctor =
+          (window as { AudioContext?: typeof AudioContext }).AudioContext ??
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctor) return;
+        this.audioContext = new Ctor();
+      }
+      const ctx = this.audioContext;
+      if (ctx.state === 'suspended') void ctx.resume();
+
+      const now = ctx.currentTime;
+      const master = ctx.createGain();
+      master.gain.setValueAtTime(0.32, now);
+      master.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+      master.connect(ctx.destination);
+
+      // Ringing metallic partials through a tight bandpass.
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.setValueAtTime(2100, now);
+      band.Q.setValueAtTime(7, now);
+      band.connect(master);
+
+      const partials = [1640, 2190, 980];
+      for (const freq of partials) {
+        const osc = ctx.createOscillator();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, now);
+        osc.detune.setValueAtTime((Math.random() - 0.5) * 36, now);
+        osc.connect(band);
+        osc.start(now);
+        osc.stop(now + 0.24);
+      }
+
+      // Bright noise attack for the initial "clang" transient.
+      const noiseFrames = Math.max(1, Math.floor(ctx.sampleRate * 0.04));
+      const buffer = ctx.createBuffer(1, noiseFrames, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+      const high = ctx.createBiquadFilter();
+      high.type = 'highpass';
+      high.frequency.setValueAtTime(3200, now);
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.5, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+      noise.connect(high);
+      high.connect(noiseGain);
+      noiseGain.connect(master);
+      noise.start(now);
+      noise.stop(now + 0.06);
+    } catch {
+      // Audio is best-effort; a missing context never interrupts combat.
+    }
+  }
+
   /** Freeze the simulation for a few frames on a melee connect. */
   public triggerHitstop(duration = HITSTOP_DURATION): void {
     this.hitstopTimer = Math.max(this.hitstopTimer, duration);
@@ -300,6 +416,11 @@ export class Engine {
     this.stats.reset();
     this.radiantCooldown = 0;
     this.radiantBurstTimer = 0;
+    this.parryCooldown = 0;
+    this.parryActiveTimer = 0;
+    this.parryFlashTimer = 0;
+    this.punchX = 0;
+    this.punchZ = 0;
     this.currentInteract = null;
     if (this.dialogueBox.isOpen) {
       this.dialogueBox.close();
@@ -532,7 +653,7 @@ export class Engine {
     // Camera zoom (scroll in / out), paused while a modal is open.
     const wheel = this.input.takeWheelDelta();
     if (wheel !== 0 && !this.dialogueOpen && !this.inventoryOpen) {
-      this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 16, 32);
+      this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 9.0, 19.5);
       this.applyViewport();
     }
 
@@ -540,6 +661,10 @@ export class Engine {
     this.hitstopTimer = Math.max(0, this.hitstopTimer - dt);
     this.shakeTimer = Math.max(0, this.shakeTimer - dt);
     this.radiantBurstTimer = Math.max(0, this.radiantBurstTimer - dt);
+    this.parryFlashTimer = Math.max(0, this.parryFlashTimer - dt);
+    const punchDecay = Math.exp(-10 * dt);
+    this.punchX *= punchDecay;
+    this.punchZ *= punchDecay;
 
     // I / Tab toggles the inventory & quest screen.
     if (this.input.consumeInventory()) {
@@ -578,6 +703,10 @@ export class Engine {
         ? Math.pow(this.radiantBurstTimer / RADIANT_BURST_DURATION, 1.5)
         : 0;
     this.postProcess.setBurstGlow(burst);
+
+    const parryFlash =
+      this.parryFlashTimer > 0 ? this.parryFlashTimer / PARRY_FLASH_DURATION : 0;
+    this.postProcess.setParryFlash(parryFlash);
   }
 
   /** Modal dialogue: freeze the world and route E / Space / click to advance. */
@@ -608,6 +737,7 @@ export class Engine {
     this.input.consumeDash();
     this.input.consumeInteract();
     this.input.consumeLightAbility();
+    this.input.consumeParry();
     this.input.consumeCancel();
   }
 
@@ -636,6 +766,7 @@ export class Engine {
     this.input.consumeDash();
     this.input.consumeInteract();
     this.input.consumeLightAbility();
+    this.input.consumeParry();
   }
 
   private updateGameplay(dt: number, state: InputState): void {
@@ -674,7 +805,13 @@ export class Engine {
       this.tryInteract();
     }
 
+    // Parry (Right-Click).
+    if (this.input.consumeParry()) {
+      this.tryParry();
+    }
+
     this.radiantCooldown = Math.max(0, this.radiantCooldown - dt);
+    this.parryCooldown = Math.max(0, this.parryCooldown - dt);
 
     const moving = Math.hypot(state.moveX, state.moveY) > 0.05;
     const wading = this.terrain ? this.terrain.isInRiver(this.playerPos.x, this.playerPos.y) : false;
@@ -729,6 +866,8 @@ export class Engine {
     const settled = this.computeAim(state);
     aimX = settled.x;
     aimY = settled.y;
+    this.aimX = aimX;
+    this.aimY = aimY;
 
     this.player3D.update(
       dt,
@@ -744,9 +883,11 @@ export class Engine {
       this.weapon.isSwinging,
     );
     this.weapon.update(dt, aimX, aimY, this.playerPos.x, this.playerPos.y);
+    this.player3D.setParrying(this.parryActiveTimer > 0);
 
     // Enemy AI, sword/enemy hits and projectiles.
     this.enemies.update(dt);
+    this.parryActiveTimer = Math.max(0, this.parryActiveTimer - dt);
 
     // Register death once, then hand off to the respawn pause.
     if (this.stats.isDead) {
@@ -754,14 +895,15 @@ export class Engine {
       this.respawnTimer = RESPAWN_DELAY;
     }
 
-    // Quest: once the upstream Blight is cleared, send the player home.
-    if (this.progression.questStage === 'active' && this.enemies.getEnemies().length === 0) {
-      this.progression.questStage = 'upstream_cleared';
-      this.hud.showToast('The upstream Blight subsides — return to the Ferryman.');
-      this.hud.flashInventoryButton();
-    }
+    // Act 1 quest: alley ambush -> survivors -> castle warden -> completed.
+    this.updateQuest();
 
     this.updateInteractPrompt();
+    const boss = this.enemies.getBoss();
+    const bossVisible =
+      !!boss &&
+      Math.hypot(boss.x - this.playerPos.x, boss.y - this.playerPos.y) < BOSS_AGGRO_RANGE;
+
     this.hud.update({
       health: this.stats.health,
       maxHealth: this.stats.maxHealth,
@@ -780,6 +922,13 @@ export class Engine {
         this.stats.stamina >= RADIANT_STAMINA,
       radiantCooldownFraction: this.radiantCooldown > 0 ? this.radiantCooldown / RADIANT_COOLDOWN : 0,
       radiantCooldownSeconds: this.radiantCooldown,
+      parryReady: this.parryCooldown <= 0 && this.stats.stamina >= PARRY_STAMINA_COST,
+      parryCooldownFraction: this.parryCooldown > 0 ? this.parryCooldown / PARRY_COOLDOWN : 0,
+      parryCooldownSeconds: this.parryCooldown,
+      bossVisible,
+      bossName: 'CASTLE WARDEN',
+      bossSubtitle: '— Blight Sentinel',
+      bossHpFraction: boss ? boss.hp / boss.maxHp : 0,
     });
     this.hud.drawPortrait(this.player3D.getPortraitPixels());
   }
@@ -817,6 +966,9 @@ export class Engine {
       this.camera.position.x += (Math.random() * 2 - 1) * amp;
       this.camera.position.z += (Math.random() * 2 - 1) * amp;
     }
+    // Subtle directional punch from a successful parry.
+    this.camera.position.x += this.punchX;
+    this.camera.position.z += this.punchZ;
     this.camera.lookAt(this.playerPos.x, LOOK_HEIGHT, -this.playerPos.y);
     if (this.cameraLeanEnabled) {
       // Subtle banking roll into the strafe direction.
@@ -883,6 +1035,36 @@ export class Engine {
     );
     this.radiantBurstTimer = RADIANT_BURST_DURATION;
     this.hud.showToast('Radiant Burst!');
+  }
+
+  /** Right-click parry: open a short active guard window at a stamina cost. */
+  private tryParry(): void {
+    if (this.parryCooldown > 0) return;
+    if (!this.stats.spendStamina(PARRY_STAMINA_COST)) return;
+
+    this.parryActiveTimer = PARRY_WINDOW;
+    this.parryCooldown = PARRY_COOLDOWN;
+    this.weapon.parry();
+  }
+
+  /** Drive the Act 1 quest stage transitions (alley -> survivors -> castle). */
+  private updateQuest(): void {
+    const stage = this.progression.questStage;
+
+    if (stage === 'alley_ambush') {
+      const reachedClearing = Math.hypot(this.playerPos.x + 28, this.playerPos.y - 10) < 9;
+      if (!this.enemies.hasAliveGroup('alley') || reachedClearing) {
+        this.progression.questStage = 'speak_survivors';
+        this.hud.showToast('The alley is clear — speak with the survivors in the clearing.');
+        this.hud.flashInventoryButton();
+      }
+    } else if (stage === 'assault_castle') {
+      if (!this.enemies.hasAliveGroup('boss')) {
+        this.progression.questStage = 'completed';
+        this.hud.showToast('The Castle Warden falls — the harbor is saved.');
+        this.hud.flashInventoryButton();
+      }
+    }
   }
 
   /** Show a prompt for the nearest interactable within range, then act on E. */
@@ -961,15 +1143,11 @@ export class Engine {
     this.dialogueBox.open(data);
     this.dialogueOpen = true;
 
-    // The Ferryman drives the quest stage transitions.
-    if (e.assetId === 'npc_ferryman') {
-      if (this.progression.questStage === 'not_started') {
-        this.progression.questStage = 'active';
-        this.hud.showToast('The Tainted Catch — clear the upstream Blight.');
-        this.hud.flashInventoryButton();
-      } else if (this.progression.questStage === 'upstream_cleared') {
-        this.progression.questStage = 'completed';
-        this.hud.showToast('The Tainted Catch complete — the river runs clean.');
+    // Speaking with the Ferryman or Elder advances the survivors -> castle stage.
+    if (this.progression.questStage === 'speak_survivors') {
+      if (e.assetId === 'npc_ferryman' || e.assetId === 'npc_elder') {
+        this.progression.questStage = 'assault_castle';
+        this.hud.showToast('Follow the blighted river north across the bridge — defeat the Castle Warden.');
         this.hud.flashInventoryButton();
       }
     }
