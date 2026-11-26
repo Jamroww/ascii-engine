@@ -361,6 +361,19 @@ export class EnemyLayer implements IRenderLayer {
       return;
     }
 
+    // Phase 2 punish pause: lowered blade, calm breath, inviting a punish.
+    if (enemy.roninPunish !== undefined && enemy.roninPunish > 0) {
+      const breathe = Math.sin(t * 2.6) * 0.02;
+      rig.hips.position.y = 0.92 + breathe;
+      rig.torso.rotation.x = 0.08;
+      rig.head.rotation.x = -0.08;
+      rig.leftArm.rotation.x = 0.12;
+      rig.rightArm.rotation.x = -0.25;
+      rig.rightArm.rotation.y = 0.3;
+      rig.weaponPivot.rotation.set(Math.PI, -0.25, 0.1);
+      return;
+    }
+
     if (state === 'telegraph') {
       if (move === 'draw') {
         // Iaijutsu draw-coil: deep crouch, hilt forward.

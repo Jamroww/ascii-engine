@@ -225,6 +225,26 @@ export class LevelManager {
     this.grass?.setFoliageColors(base, tip);
   }
 
+  /** Live-update the earth/path hue from the palette Ground channel. */
+  public setGroundColor(color: THREE.Color): void {
+    this.ground?.setGroundColor(color);
+  }
+
+  /** Live-update the water base tint from the palette Water channel. */
+  public setWaterColor(hex: string): void {
+    this.water?.setWaterColor(hex);
+  }
+
+  /** Live-update the structural albedo tint from the palette Structure channel. */
+  public setStructureColor(hex: string): void {
+    this.worldModels?.setStructureTint(hex);
+  }
+
+  /** Character roots owned by this level (NPC models for ASCII isolation). */
+  public getCharacterObjects(): THREE.Object3D[] {
+    return this.worldModels?.getNpcModels() ?? [];
+  }
+
   // --- Editor-ready mutations -------------------------------------------------
 
   public addEntity(entity: PlacedEntity): void {
@@ -336,6 +356,7 @@ export class LevelManager {
     this.ground.setBaseTint(
       new THREE.Color(this.theme.groundTint.r, this.theme.groundTint.g, this.theme.groundTint.b),
     );
+    this.ground.setGroundColor(hexToColor(palette.groundColor));
     this.grass = new GrassLayer(this.terrain, {
       foliageBase: hexToColor(palette.foliageBase),
       foliageTip: hexToColor(palette.foliageTip),

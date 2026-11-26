@@ -112,13 +112,22 @@ function hsvToRgb(h: number, s: number, v: number): { r: number; g: number; b: n
   return { r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255 };
 }
 
-const PALETTE_CHANNELS: Array<{ key: PaletteChannel; label: string }> = [
+type ChannelDef = { key: PaletteChannel; label: string };
+
+/** Surface / void colours, cleanly separated from the light channels. */
+const ENVIRONMENT_CHANNELS: ChannelDef[] = [
   { key: 'foliageBase', label: 'Foliage Base' },
   { key: 'foliageTip', label: 'Foliage Tip' },
-  { key: 'sunColor', label: 'Sun/Moon' },
-  { key: 'skyFillColor', label: 'Sky Fill' },
   { key: 'groundColor', label: 'Ground' },
+  { key: 'waterColor', label: 'Water' },
+  { key: 'structureColor', label: 'Structures' },
   { key: 'asciiVoidColor', label: 'ASCII Void' },
+];
+
+/** Emissive / atmospheric light channels. */
+const LIGHTING_CHANNELS: ChannelDef[] = [
+  { key: 'sunColor', label: 'Sun / Moon' },
+  { key: 'skyFillColor', label: 'Sky Fill' },
   { key: 'bloomTint', label: 'Bloom Tint' },
 ];
 
@@ -353,10 +362,8 @@ export class InventoryModal {
     const state = enabled ? 'ON' : 'OFF';
     const activeLevel = this.settings.getActiveLevelId();
 
-    const channelsHtml = PALETTE_CHANNELS.map(
-      (c) =>
-        `<button class="inventory-modal__channel ${c.key === this.paletteChannel ? 'is-active' : ''}" data-channel="${c.key}">${c.label}</button>`
-    ).join('');
+    const channelsHtml = this.renderChannelGroup('Environment', ENVIRONMENT_CHANNELS) +
+      this.renderChannelGroup('Lighting', LIGHTING_CHANNELS);
 
     return `
       <div class="inventory-modal__settings">
@@ -376,7 +383,7 @@ export class InventoryModal {
 
         <div class="inventory-modal__slot-label">PALETTE STUDIO</div>
         <div class="inventory-modal__palette">
-          <div class="inventory-modal__channels">${channelsHtml}</div>
+          ${channelsHtml}
           <div class="inventory-modal__wheel-row">
             <canvas class="inventory-modal__wheel" width="140" height="140"></canvas>
             <div class="inventory-modal__value-col">
@@ -393,6 +400,22 @@ export class InventoryModal {
             <button class="inventory-modal__action" data-copy-palette type="button">Copy Palette</button>
           </div>
         </div>
+      </div>
+    `;
+  }
+
+  /** Render a labelled group of palette channel pills. */
+  private renderChannelGroup(label: string, channels: ChannelDef[]): string {
+    const pills = channels
+      .map(
+        (c) =>
+          `<button class="inventory-modal__channel ${c.key === this.paletteChannel ? 'is-active' : ''}" data-channel="${c.key}">${c.label}</button>`
+      )
+      .join('');
+    return `
+      <div class="inventory-modal__channel-group">
+        <div class="inventory-modal__channel-group-label">${label}</div>
+        <div class="inventory-modal__channels">${pills}</div>
       </div>
     `;
   }

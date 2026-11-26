@@ -92,6 +92,7 @@ export class Engine {
   private readonly inventoryModal: InventoryModal;
   public readonly stats = new PlayerStats();
   public readonly enemies: EnemyManager;
+  private readonly enemyLayer: EnemyLayer;
   public readonly progression = new ProgressionSystem();
   public readonly inventory = new InventorySystem();
   private readonly layers: IRenderLayer[] = [];
@@ -147,6 +148,7 @@ export class Engine {
   private inventoryOpen = false;
   private currentInteract: PlacedEntity | null = null;
   private pendingRoninStart = false;
+  private pendingRoninPhase2 = false;
   private roninInteract = false;
   private roninFightActive = false;
 
@@ -246,7 +248,8 @@ export class Engine {
     this.scene.add(this.lanternLight);
 
     this.enemies = new EnemyManager(this);
-    this.addLayer(new EnemyLayer(this.enemies));
+    this.enemyLayer = new EnemyLayer(this.enemies);
+    this.addLayer(this.enemyLayer);
 
     this.hud = new Hud(container);
     this.dialogueBox = new DialogueBox(container);
@@ -319,6 +322,7 @@ export class Engine {
         ? LevelManager.createSunsetWheatfieldLevel()
         : LevelManager.createDefaultVillageLevel();
     this.pendingRoninStart = false;
+    this.pendingRoninPhase2 = false;
     this.roninInteract = false;
     this.roninFightActive = false;
     this.levelManager?.loadLevel(data);
@@ -357,6 +361,9 @@ export class Engine {
     this.postProcess.setBgColor(hexToColor(p.asciiVoidColor));
     this.postProcess.setBloomTint(hexToColor(p.bloomTint));
     this.levelManager?.setFoliageColors(hexToColor(p.foliageBase), hexToColor(p.foliageTip));
+    this.levelManager?.setGroundColor(hexToColor(p.groundColor));
+    this.levelManager?.setWaterColor(p.waterColor);
+    this.levelManager?.setStructureColor(p.structureColor);
   }
 
   /** Close the inventory modal (used by the level selector). */
@@ -397,6 +404,16 @@ export class Engine {
   /** Melee-only parry payoff: directional camera punch + synthesized clang. */
   public onMeleeParry(dirX: number, dirY: number): void {
     this.triggerCameraPunch(dirX, dirY, 0.5);
+    this.playParryClang();
+  }
+
+  /** Blinding white screen flash (draw counter, parry counter, transitions). */
+  public triggerScreenFlash(duration = PARRY_FLASH_DURATION): void {
+    this.parryFlashTimer = Math.max(this.parryFlashTimer, duration);
+  }
+
+  /** Synthesized metallic clash, exposed for boss counters. */
+  public playClang(): void {
     this.playParryClang();
   }
 
@@ -505,6 +522,10 @@ export class Engine {
     this.punchX = 0;
     this.punchZ = 0;
     this.currentInteract = null;
+    this.pendingRoninStart = false;
+    this.pendingRoninPhase2 = false;
+    this.roninInteract = false;
+    this.roninFightActive = false;
     if (this.dialogueBox.isOpen) {
       this.dialogueBox.close();
       this.dialogueOpen = false;
@@ -577,6 +598,15 @@ export class Engine {
     return { x: this.playerPos.x, y: this.playerPos.y };
   }
 
+  /** Character roots isolated into the dedicated `charRT` by the post-process. */
+  private getCharacterObjects(): THREE.Object3D[] {
+    return [
+      this.player3D.group,
+      this.enemyLayer.object3D,
+      ...(this.levelManager?.getCharacterObjects() ?? []),
+    ];
+  }
+
   public start(): void {
     this.clock.start();
     const tick = () => {
@@ -603,6 +633,7 @@ export class Engine {
         this.weatherScene,
         this.overlayScene,
         this.waterObject,
+        this.getCharacterObjects(),
       );
     };
     tick();
@@ -815,6 +846,9 @@ export class Engine {
       if (this.pendingRoninStart) {
         this.pendingRoninStart = false;
         this.startRoninFight();
+      } else if (this.pendingRoninPhase2) {
+        this.pendingRoninPhase2 = false;
+        this.enemies.completeRoninPhase2Dialogue();
       }
     }
   }
@@ -1296,6 +1330,15 @@ export class Engine {
     this.pendingRoninStart = true;
   }
 
+  /** Mid-fight screen-freeze speech when the Ronin drops to half health. */
+  public beginRoninPhase2Dialogue(): void {
+    const data = this.progression.getDialogueLines('npc_ronin_phase2');
+    this.dialogueBox.open(data);
+    this.dialogueOpen = true;
+    this.pendingRoninPhase2 = true;
+    this.drainGameplayInput();
+  }
+
   /** Gale pushback + phase-one transition for The Ronin after dialogue. */
   private startRoninFight(): void {
     const ronin = this.enemies.getBoss();
@@ -1325,6 +1368,7 @@ export class Engine {
     this.roninFightActive = false;
     this.roninInteract = false;
     this.pendingRoninStart = false;
+    this.pendingRoninPhase2 = false;
     this.playerPos.set(this.spawnPoint.x, this.spawnPoint.y);
     this.knockbackX = 0;
     this.knockbackY = 0;

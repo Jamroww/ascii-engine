@@ -19,6 +19,7 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
   precision highp float;
 
   uniform sampler2D uSceneTex;
+  uniform sampler2D uCharTex;
   uniform sampler2D uAtlasTex;
   uniform vec2 uResolution;
   uniform vec2 uCellSize;
@@ -47,6 +48,22 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
     return texture2D(uSceneTex, uv).rgb;
   }
 
+  vec4 sampleChar(vec2 px) {
+    vec2 uv = px / uResolution;
+    uv = clamp(uv, vec2(0.5) / uResolution, vec2(1.0) - vec2(0.5) / uResolution);
+    return texture2D(uCharTex, uv);
+  }
+
+  float sampleGlyph(float idx, vec2 cellUv) {
+    float gcol = mod(idx, uAtlasGrid.x);
+    float grow = floor(idx / uAtlasGrid.x);
+    vec2 atlasUv = vec2(
+      (gcol + cellUv.x) / uAtlasGrid.x,
+      1.0 - ((grow + 1.0 - cellUv.y) / uAtlasGrid.y)
+    );
+    return texture2D(uAtlasTex, atlasUv).a;
+  }
+
   void main() {
     vec2 shifted = gl_FragCoord.xy - uGridOffset;
     vec2 cell = floor(shifted / uCellSize);
@@ -55,38 +72,73 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
     vec2 base = cell * uCellSize + uCellSize * 0.5 + uSampleOffset;
 
     // Tight 2x2 sub-cell average keeps fine silhouettes, rooflines and limbs
-    // razor-sharp without sub-pixel moiré shimmer.
+    // razor-sharp without sub-pixel moiré shimmer (environment + characters).
     vec3 col = vec3(0.0);
+    vec4 charAvg = vec4(0.0);
     for (int j = 0; j < 2; j++) {
       for (int i = 0; i < 2; i++) {
         vec2 off = (vec2(float(i), float(j)) * 2.0 - 1.0) * (uCellSize * 0.18);
         col += sampleScene(base + off);
+        charAvg += sampleChar(base + off);
       }
     }
     col *= 0.25;
+    charAvg *= 0.25;
 
+    // 1-cell cardinal neighbour coverage for the silhouette separation border.
+    float nLeft = sampleChar(base + vec2(-uCellSize.x, 0.0)).a;
+    float nRight = sampleChar(base + vec2(uCellSize.x, 0.0)).a;
+    float nUp = sampleChar(base + vec2(0.0, uCellSize.y)).a;
+    float nDown = sampleChar(base + vec2(0.0, -uCellSize.y)).a;
+    float neighborA = max(max(nLeft, nRight), max(nUp, nDown));
+
+    bool isChar = charAvg.a > 0.22;
+
+    if (isChar) {
+      // Characters are drawn from their own lit pass with a crisp readability
+      // lift, then composited over a fixed dark ink backdrop. This completely
+      // prevents bright terracotta/sunset void or pink/gold ground from washing
+      // out the silhouette.
+      vec3 charRgb = charAvg.rgb * 1.35;
+      vec3 ctn = tonemap(charRgb);
+      float cL = dot(ctn, LUMA);
+      if (cL < 0.08) cL = 0.08;
+
+      float mapped = clamp((cL - 0.08) / 0.84, 0.0, 1.0);
+      float idx = floor(mapped * (uGlyphCount - 1.0) + 0.5);
+      float glyphAlpha = sampleGlyph(idx, cellUv);
+
+      vec3 chroma = ctn / max(max(ctn.r, max(ctn.g, ctn.b)), 0.001);
+      vec3 fg = mix(ctn, chroma, 0.45);
+      fg = mix(fg, vec3(1.0), smoothstep(0.78, 0.96, cL));
+      fg *= mix(0.14, 1.12, pow(mapped, 1.35));
+      fg += vec3(0.30, 0.16, 0.04) * uBurstGlow;
+      fg += vec3(0.9, 0.94, 1.0) * uParryFlash;
+
+      vec3 cellBg = vec3(0.018, 0.018, 0.024);
+      gl_FragColor = vec4(mix(cellBg, fg, glyphAlpha), 1.0);
+      return;
+    }
+
+    // Environment cell, with a subtle 1-cell dark silhouette border.
     vec3 tn = tonemap(col);
     float L = dot(tn, LUMA);
+    vec3 cellBg = uBgColor;
+    if (neighborA > 0.45) {
+      cellBg = mix(cellBg, vec3(0.02), 0.55);
+    }
 
-    // Pure #000000 floor for pitch-black ground/bank undercuts, while letting
-    // moonlit buildings, trees, and midnight water remain clearly legible. The
-    // floor now uses uBgColor so a sunset wheatfield can keep a warm charcoal
-    // void instead of hard black (Level 1 keeps uBgColor = pure black).
+    // Pure uBgColor floor for pitch-black ground/bank undercuts, while letting
+    // moonlit buildings, trees, and midnight water remain clearly legible.
     if (L < 0.08) {
-      gl_FragColor = vec4(uBgColor, 1.0);
+      gl_FragColor = vec4(cellBg, 1.0);
       return;
     }
 
     // Linear remap across the glyph ramp (no S-curve shadow crush).
     float mapped = clamp((L - 0.08) / 0.84, 0.0, 1.0);
     float idx = floor(mapped * (uGlyphCount - 1.0) + 0.5);
-    float gcol = mod(idx, uAtlasGrid.x);
-    float grow = floor(idx / uAtlasGrid.x);
-    vec2 atlasUv = vec2(
-      (gcol + cellUv.x) / uAtlasGrid.x,
-      1.0 - ((grow + 1.0 - cellUv.y) / uAtlasGrid.y)
-    );
-    float glyphAlpha = texture2D(uAtlasTex, atlasUv).a;
+    float glyphAlpha = sampleGlyph(idx, cellUv);
 
     // Preserve hue on midtones (slate stone, timber, russet bark, navy water).
     // A dark chiaroscuro curve keeps shadows deep nocturnal while lit faces,
@@ -103,9 +155,8 @@ const POST_FRAGMENT_SHADER = /* glsl */ `
     fgColor += vec3(0.9, 0.94, 1.0) * uParryFlash;
 
     // Composite the glyph over the void colour so the empty space *between*
-    // glyphs matches the below-black-point floor (black for Level 1, warm
-    // charcoal for the wheatfield).
-    vec3 outCol = mix(uBgColor, fgColor, glyphAlpha);
+    // glyphs matches the below-black-point floor.
+    vec3 outCol = mix(cellBg, fgColor, glyphAlpha);
     gl_FragColor = vec4(outCol, 1.0);
   }
 `;
@@ -179,6 +230,8 @@ const COMPOSITE_FRAGMENT_SHADER = /* glsl */ `
 
 export class AsciiPostProcess {
   private readonly sceneRT: THREE.WebGLRenderTarget;
+  /** Occluded-character isolation target (RGB + alpha coverage). */
+  private readonly charRT: THREE.WebGLRenderTarget;
   /** Finished ASCII + depth-tested grass + weather frame (pre-bloom). */
   private readonly compositeRT: THREE.WebGLRenderTarget;
   /** Quarter-res bloom buffers (A doubles as the final blurred result). */
@@ -213,6 +266,13 @@ export class AsciiPostProcess {
       depthBuffer: true,
     });
 
+    this.charRT = new THREE.WebGLRenderTarget(1, 1, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      depthBuffer: true,
+    });
+
     this.compositeRT = new THREE.WebGLRenderTarget(1, 1, {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
@@ -241,6 +301,7 @@ export class AsciiPostProcess {
       fragmentShader: POST_FRAGMENT_SHADER,
       uniforms: {
         uSceneTex: { value: this.sceneRT.texture },
+        uCharTex: { value: this.charRT.texture },
         uAtlasTex: { value: atlas.texture },
         uResolution: { value: new THREE.Vector2(1, 1) },
         uCellSize: { value: new THREE.Vector2(6, 9) },
@@ -318,6 +379,7 @@ export class AsciiPostProcess {
     const height = size.y;
     if (width <= 0 || height <= 0) return;
     this.sceneRT.setSize(width, height);
+    this.charRT.setSize(width, height);
     this.compositeRT.setSize(width, height);
 
     const bloomWidth = Math.max(1, Math.floor(width / 4));
@@ -401,6 +463,7 @@ export class AsciiPostProcess {
     weatherScene: THREE.Scene | null,
     overlayScene: THREE.Scene | null,
     waterObject: THREE.Object3D | null,
+    characterObjects: THREE.Object3D[],
   ): void {
     const prevTarget = renderer.getRenderTarget();
 
@@ -409,10 +472,16 @@ export class AsciiPostProcess {
     renderer.shadowMap.autoUpdate = false;
     renderer.shadowMap.needsUpdate = true;
 
-    // 1. World -> sceneRT (full-res colour + depth).
+    // 1a. Environment -> sceneRT (characters hidden so the void/ground never
+    //     bleeds into them; they are re-composited from their own charRT pass).
+    for (const o of characterObjects) o.visible = false;
     renderer.setRenderTarget(this.sceneRT);
     renderer.clear(true, true, true);
     renderer.render(worldScene, worldCamera);
+    for (const o of characterObjects) o.visible = true;
+
+    // 1b. Occluded characters -> charRT (RGB + alpha coverage, world-depth exact).
+    this.renderCharacters(renderer, worldScene, worldCamera, waterObject, characterObjects);
 
     // 2. ASCII glyph pass -> compositeRT.
     renderer.setRenderTarget(this.compositeRT);
@@ -476,8 +545,92 @@ export class AsciiPostProcess {
     if (prevTarget !== null) renderer.setRenderTarget(prevTarget);
   }
 
+  /**
+   * Isolate visible, unoccluded character pixels into `charRT`. First the opaque
+   * world blockers are rendered depth-only (skipping the see-through canopy), so
+   * the character pass is correctly occluded behind cottages and the great tree
+   * trunk; then only the character meshes + active scene lights are rendered with
+   * depth test/write so their lit RGB lands with alpha = 1.0.
+   */
+  private renderCharacters(
+    renderer: THREE.WebGLRenderer,
+    worldScene: THREE.Scene,
+    worldCamera: THREE.OrthographicCamera,
+    waterObject: THREE.Object3D | null,
+    characterObjects: THREE.Object3D[],
+  ): void {
+    const prevColor = new THREE.Color();
+    renderer.getClearColor(prevColor);
+    const prevAlpha = renderer.getClearAlpha();
+    const prevOverride = worldScene.overrideMaterial;
+    const prevBackground = worldScene.background;
+
+    renderer.setRenderTarget(this.charRT);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, true, true);
+
+    // Hide characters, water and the translucent canopy for the depth prepass.
+    for (const o of characterObjects) o.visible = false;
+    const prevWater = waterObject ? waterObject.visible : true;
+    if (waterObject) waterObject.visible = false;
+    worldScene.background = null;
+
+    this.collectSkipDepthPrepass(worldScene);
+    for (const skip of this.skipDepthMeshes) skip.visible = false;
+
+    // Opaque world blockers -> depth only (charRT's Z-buffer = exact occlusion).
+    worldScene.overrideMaterial = this.depthOnlyMaterial;
+    renderer.render(worldScene, worldCamera);
+    worldScene.overrideMaterial = prevOverride;
+
+    for (const skip of this.skipDepthMeshes) skip.visible = true;
+    this.skipDepthMeshes.length = 0;
+
+    // Restore characters so they render their lit colour into charRT.
+    for (const o of characterObjects) o.visible = true;
+
+    // Keep only character meshes + lights visible, then render their lit colour.
+    const charSet = new Set(characterObjects);
+    const hidden: THREE.Object3D[] = [];
+    worldScene.traverse((obj) => {
+      if (obj === worldScene) return;
+      if ((obj as THREE.Light).isLight) return;
+      if (this.isCharacterOrDescendant(obj, charSet)) return;
+      const renderable = obj as THREE.Object3D & {
+        isMesh?: boolean;
+        isLine?: boolean;
+        isPoints?: boolean;
+        isSprite?: boolean;
+      };
+      if (obj.visible && (renderable.isMesh || renderable.isLine || renderable.isPoints || renderable.isSprite)) {
+        obj.visible = false;
+        hidden.push(obj);
+      }
+    });
+
+    renderer.render(worldScene, worldCamera);
+
+    for (const h of hidden) h.visible = true;
+    worldScene.background = prevBackground;
+    if (waterObject) waterObject.visible = prevWater;
+    for (const o of characterObjects) o.visible = true;
+
+    renderer.setClearColor(prevColor, prevAlpha);
+  }
+
+  /** True when `obj` is a character root or a descendant of one. */
+  private isCharacterOrDescendant(obj: THREE.Object3D, charSet: Set<THREE.Object3D>): boolean {
+    let p: THREE.Object3D | null = obj;
+    while (p) {
+      if (charSet.has(p)) return true;
+      p = p.parent;
+    }
+    return false;
+  }
+
   public dispose(): void {
     this.sceneRT.dispose();
+    this.charRT.dispose();
     this.compositeRT.dispose();
     this.bloomRT_A.dispose();
     this.bloomRT_B.dispose();

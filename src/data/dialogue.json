@@ -128,5 +128,17 @@
     "quest_cleared_poison": [],
     "high_corruption": [],
     "high_virtue": []
+  },
+  "npc_ronin_phase2": {
+    "speaker": "The Ronin",
+    "default": [
+      "Enough testing. Your steel remembers the old weight...",
+      "Then step across the wind and show me what survives."
+    ],
+    "quest_active": [],
+    "quest_cleared_light": [],
+    "quest_cleared_poison": [],
+    "high_corruption": [],
+    "high_virtue": []
   }
 }

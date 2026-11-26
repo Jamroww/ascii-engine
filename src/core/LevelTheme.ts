@@ -13,6 +13,10 @@ export interface PaletteConfig {
   groundColor: string;
   asciiVoidColor: string;
   bloomTint: string;
+  /** Base tint for river / bay water (Level 1 only renders water). */
+  waterColor: string;
+  /** Tint multiplied into non-emissive building / prop / stone albedos. */
+  structureColor: string;
 }
 
 /** The seven channel keys exposed by the HSV colour wheel. */
@@ -52,6 +56,8 @@ export const ACT1_THEME: LevelTheme = {
     groundColor: '#1b2822',
     asciiVoidColor: '#000000',
     bloomTint: '#d8e8ff',
+    waterColor: '#1b4566',
+    structureColor: '#9cb0c4',
   },
   sunIntensity: 3.0,
   skyFillIntensity: 0.34,
@@ -67,13 +73,15 @@ export const ACT1_THEME: LevelTheme = {
 export const ACT2_THEME: LevelTheme = {
   id: 'act2_wheatfield',
   palette: {
-    foliageBase: '#6e3c0e',
-    foliageTip: '#f2bc38',
+    foliageBase: '#c4a260',
+    foliageTip: '#eff27f',
     sunColor: '#ffad52',
     skyFillColor: '#d46a4c',
-    groundColor: '#3b2014',
-    asciiVoidColor: '#140908',
-    bloomTint: '#ffbe6b',
+    groundColor: '#ff5385',
+    asciiVoidColor: '#784635',
+    bloomTint: '#ff6e4c',
+    waterColor: '#1b4566',
+    structureColor: '#c7a086',
   },
   sunIntensity: 3.6,
   skyFillIntensity: 0.46,

@@ -63,8 +63,8 @@ export class ProgressionSystem {
     if (!entry) {
       return { speaker: npcAssetId, lines: ['…'] };
     }
-    // The Ronin's pre-fight speech is always his moody opening lines.
-    if (npcAssetId === 'npc_ronin') {
+    // The Ronin's pre-fight + phase-two speeches are always his fixed lines.
+    if (npcAssetId === 'npc_ronin' || npcAssetId === 'npc_ronin_phase2') {
       return { speaker: entry.speaker, lines: entry.default };
     }
     const bucket = this.selectBucket();

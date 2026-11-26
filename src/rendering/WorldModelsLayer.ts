@@ -52,6 +52,7 @@ export class WorldModelsLayer implements IRenderLayer {
 
   private entries: WorldModelEntry[] = [];
   private highlightId: string | null = null;
+  private structureTintHex: string | null = null;
 
   private readonly pool: THREE.PointLight[] = [];
   private readonly poolIntensity: number[] = [];
@@ -87,6 +88,8 @@ export class WorldModelsLayer implements IRenderLayer {
       this.entries.push(entry);
       this.object3D.add(entry.model);
     }
+
+    if (this.structureTintHex) this.applyStructureTint();
   }
 
   /** Colliders for every placed entity with a positive radius / footprint. */
@@ -135,6 +138,22 @@ export class WorldModelsLayer implements IRenderLayer {
   /** Brighten the glow of the nearest in-range interactable (or clear it). */
   public setInteractableHighlight(entityId: string | null): void {
     this.highlightId = entityId;
+  }
+
+  /** NPC model roots (isolated as characters by the ASCII post-process). */
+  public getNpcModels(): THREE.Object3D[] {
+    return this.entries.filter((e) => e.placement.kind === 'npc').map((e) => e.model);
+  }
+
+  /**
+   * Palette Structure channel: multiply each non-emissive structural albedo by a
+   * tint, always re-derived from the cached original so live edits never stack.
+   * Emissive windows / lanterns / shrine glows and the pooled PointLights are
+   * never touched.
+   */
+  public setStructureTint(hex: string): void {
+    this.structureTintHex = hex;
+    this.applyStructureTint();
   }
 
   public update(ctx: FrameContext): void {
@@ -214,6 +233,7 @@ export class WorldModelsLayer implements IRenderLayer {
     setCastShadow(model, true);
     setReceiveShadow(model, true);
     liftWorldModelMaterials(model, placement.kind);
+    cacheStructuralBaseColors(model);
 
     return {
       placement,
@@ -221,6 +241,22 @@ export class WorldModelsLayer implements IRenderLayer {
       sources: collectEmissiveSources(model, MAX_SOURCES_PER_ENTRY),
       absorbed: false,
     };
+  }
+
+  private applyStructureTint(): void {
+    if (!this.structureTintHex) return;
+    const tint = new THREE.Color(this.structureTintHex);
+    for (const entry of this.entries) {
+      entry.model.traverse((node) => {
+        if (!(node instanceof THREE.Mesh)) return;
+        const mat = node.material;
+        if (!(mat instanceof THREE.MeshStandardMaterial)) return;
+        if (isStructuralEmissive(mat, node)) return;
+        const base = mat.userData.baseColor as THREE.Color | undefined;
+        if (!base) return;
+        mat.color.copy(base).multiply(tint);
+      });
+    }
   }
 
   private disposeEntries(): void {
@@ -303,5 +339,31 @@ function liftWorldModelMaterials(model: THREE.Group, kind: EntityKind): void {
       geo instanceof THREE.BoxGeometry &&
       (Math.abs(node.rotation.x) > 0.25 || Math.abs(node.rotation.z) > 0.25);
     if (canopy || pitchedRoof) node.receiveShadow = false;
+  });
+}
+
+/**
+ * True for materials that read as emissive light (windows, lanterns, shrine
+ * glows, braziers). The structure tint must never touch these so they stay
+ * fully independent of the palette's Structure channel. Non-emissive materials
+ * (black emissive) are always eligible, regardless of the default intensity 1.0.
+ */
+function isStructuralEmissive(mat: THREE.MeshStandardMaterial, node: THREE.Mesh): boolean {
+  if (node.userData.isEmissive === true) return true;
+  const e = mat.emissive;
+  const emissiveBright = e.r > 0.01 || e.g > 0.01 || e.b > 0.01;
+  if (!emissiveBright) return false;
+  if (mat.emissiveIntensity > 0.5) return true;
+  return e.r > 0.25 && e.g > 0.12 && e.r + e.g + e.b > 0.5;
+}
+
+/** Cache each non-emissive structural albedo so tints can be re-derived cleanly. */
+function cacheStructuralBaseColors(model: THREE.Group): void {
+  model.traverse((node) => {
+    if (!(node instanceof THREE.Mesh)) return;
+    const mat = node.material;
+    if (!(mat instanceof THREE.MeshStandardMaterial)) return;
+    if (isStructuralEmissive(mat, node)) return;
+    mat.userData.baseColor = mat.color.clone();
   });
 }

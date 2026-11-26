@@ -17,6 +17,7 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
   uniform float uWorldSize;
   uniform float uSdfRange;
   uniform vec3 uBaseTint;
+  uniform vec3 uGroundColor;
 
   varying vec2 vWorld;
 
@@ -90,7 +91,19 @@ const GROUND_FRAGMENT_SHADER = /* glsl */ `
     // Cold blight tint where corrupted.
     col = mix(col, vec3(0.04, 0.09, 0.06), blight * 0.3);
 
-    // Warm sunset dry-earth tint (white = no change for Level 1).
+    // Palette Ground channel: shift the baked earth hue toward the chosen colour
+    // while preserving its luminance, so a dark Level 1 green or a bright Level 2
+    // sunset rose both keep the packed-dirt paths, rocky banks and contour bands
+    // cleanly legible (emissive lights are never touched).
+    const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+    float earthLum = dot(col, LUMA) + 1e-4;
+    float groundLum = dot(uGroundColor, LUMA) + 1e-4;
+    vec3 groundHue = uGroundColor / groundLum;
+    vec3 hueShifted = col * groundHue;
+    float shiftedLum = dot(hueShifted, LUMA) + 1e-4;
+    col = mix(col, hueShifted * (earthLum / shiftedLum), 0.72);
+
+    // Warm sunset dry-earth multiplier (white = no change for Level 1).
     col *= uBaseTint;
 
     gl_FragColor = vec4(col, 1.0);
@@ -110,6 +123,7 @@ export class GroundLayer implements IRenderLayer {
         uWorldSize: { value: terrain.worldSize },
         uSdfRange: { value: SDF_RANGE },
         uBaseTint: { value: new THREE.Color(1, 1, 1) },
+        uGroundColor: { value: new THREE.Color(1, 1, 1) },
       },
       depthWrite: false,
     });
@@ -126,6 +140,11 @@ export class GroundLayer implements IRenderLayer {
   /** Warm dry-earth multiplier tint for the arena (white = no change). */
   public setBaseTint(color: THREE.Color): void {
     (this.material.uniforms.uBaseTint.value as THREE.Color).copy(color);
+  }
+
+  /** Palette Ground channel: luminance-preserving hue of the earth/path shading. */
+  public setGroundColor(color: THREE.Color): void {
+    (this.material.uniforms.uGroundColor.value as THREE.Color).copy(color);
   }
 
   public dispose(): void {

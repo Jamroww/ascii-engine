@@ -35,6 +35,7 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uPlayerReflectionTex;
   uniform vec2 uScreenResolution;
   uniform sampler2D uMoonTex;
+  uniform vec3 uWaterColor;
 
   varying vec2 vWorld;
 
@@ -90,9 +91,13 @@ const WATER_FRAGMENT_SHADER = /* glsl */ `
 
     float blight = t.g;
 
-    // --- True linear midnight-navy base + flowing downstream currents ---
-    vec3 deepCol = vec3(0.004, 0.011, 0.022);
-    vec3 litCol  = vec3(0.011, 0.028, 0.052);
+    // --- Palette Water channel base colour + flowing downstream currents ---
+    // The uniform holds sRGB 0..1 and is converted to physical linear in-shader,
+    // then split into deep / lit bands. Moon, player and warm lantern reflections
+    // are layered afterwards and never derive from this base tint.
+    vec3 lin = pow(max(uWaterColor, vec3(0.0)), vec3(2.2));
+    vec3 deepCol = lin * 0.14;
+    vec3 litCol  = lin * 0.36;
 
     // Downstream is -y in gameplay coords (+Z in 3D).
     float flowA = vWorld.y + uTime * 0.65;
@@ -344,6 +349,7 @@ export class WaterLayer implements IRenderLayer {
         uPlayerReflectionTex: { value: null },
         uScreenResolution: { value: new THREE.Vector2(1, 1) },
         uMoonTex: { value: null },
+        uWaterColor: { value: WaterLayer.hexToSrgb('#1b4566') },
       },
       depthWrite: false,
     });
@@ -362,6 +368,23 @@ export class WaterLayer implements IRenderLayer {
 
   public setLights(lights: WaterLight[]): void {
     this.allLights = lights;
+  }
+
+  /** Parse a `#rrggbb` hex into raw sRGB 0..1 components (no linearisation). */
+  private static hexToSrgb(hex: string): THREE.Vector3 {
+    let h = hex.replace('#', '');
+    if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+    const num = parseInt(h, 16);
+    return new THREE.Vector3(
+      ((num >> 16) & 255) / 255,
+      ((num >> 8) & 255) / 255,
+      (num & 255) / 255,
+    );
+  }
+
+  /** Palette Water channel: tint the river / bay base without touching reflections. */
+  public setWaterColor(hex: string): void {
+    (this.material.uniforms.uWaterColor.value as THREE.Vector3).copy(WaterLayer.hexToSrgb(hex));
   }
 
   public setPlayerReflection(
