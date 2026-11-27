@@ -1086,3 +1086,220 @@ body,
   border-top-color: #7a7a7a;
   border-left-color: #7a7a7a;
 }
+
+/* ---------------------------------------------------------------------------
+   Flask HUD plate (empty state dim).
+--------------------------------------------------------------------------- */
+.hud-ability--flask.is-empty {
+  opacity: 0.4;
+}
+
+/* ---------------------------------------------------------------------------
+   Settings: playtest tuning sliders.
+--------------------------------------------------------------------------- */
+.inventory-modal__stat-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #3a3a3a;
+  border-right-color: #3a3a3a;
+  background: rgba(8, 8, 10, 0.9);
+}
+.inventory-modal__stat-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.inventory-modal__stat-slider-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.inventory-modal__stat-slider-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #cfcfcf;
+}
+.inventory-modal__stat-slider-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+}
+.inventory-modal__stat-slider input[type='range'] {
+  width: 100%;
+  accent-color: #e8e8e8;
+}
+
+/* ---------------------------------------------------------------------------
+   Assets & Levels tab.
+--------------------------------------------------------------------------- */
+.inventory-modal__assets {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.inventory-modal__importer {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #3a3a3a;
+  border-right-color: #3a3a3a;
+  background: rgba(8, 8, 10, 0.9);
+}
+.inventory-modal__file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.inventory-modal__file-label,
+.inventory-modal__file-action {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #e8e8e8;
+  background: rgba(20, 20, 24, 0.9);
+  border: 2px solid;
+  border-top-color: #5a5a5a;
+  border-left-color: #5a5a5a;
+  border-bottom-color: #0e0e0e;
+  border-right-color: #0e0e0e;
+  cursor: pointer;
+}
+.inventory-modal__file-label:hover,
+.inventory-modal__file-action:hover {
+  background: rgba(40, 40, 46, 0.95);
+  border-top-color: #7a7a7a;
+  border-left-color: #7a7a7a;
+}
+.inventory-modal__file-label input[type='file'],
+.inventory-modal__file-action input[type='file'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.inventory-modal__file-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  background: #060708;
+  border: 2px solid #2a2a2d;
+  image-rendering: pixelated;
+}
+.inventory-modal__field-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.inventory-modal__field-label {
+  flex: 0 0 118px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #cfcfcf;
+}
+.inventory-modal__field-label b {
+  color: #ffffff;
+}
+.inventory-modal__field-row select,
+.inventory-modal__field-row input[type='range'] {
+  flex: 1;
+}
+.inventory-modal__field-row select {
+  padding: 5px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: #e8e8e8;
+  background: #060708;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #5a5a5a;
+  border-right-color: #5a5a5a;
+  outline: none;
+}
+.inventory-modal__field-row input[type='range'] {
+  accent-color: #e8e8e8;
+}
+.inventory-modal__custom-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.inventory-modal__custom-asset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 2px solid;
+  border-top-color: #0e0e0e;
+  border-left-color: #0e0e0e;
+  border-bottom-color: #2a2a2d;
+  border-right-color: #2a2a2d;
+  background: rgba(10, 10, 12, 0.8);
+}
+.inventory-modal__custom-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  background: #060708;
+  border: 1px solid #2a2a2d;
+  image-rendering: pixelated;
+  flex: 0 0 auto;
+}
+.inventory-modal__custom-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.inventory-modal__custom-id {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inventory-modal__custom-detail {
+  font-size: 10px;
+  color: #9a9a9a;
+}
+.inventory-modal__action--danger {
+  flex: 0 0 auto;
+  border-top-color: #5a3a3a;
+  border-left-color: #5a3a3a;
+}
+.inventory-modal__action--danger:hover {
+  background: rgba(46, 20, 20, 0.9);
+  border-top-color: #9a5a5a;
+  border-left-color: #9a5a5a;
+}
+.inventory-modal__level-actions {
+  display: flex;
+  gap: 8px;
+}
+.inventory-modal__level-status {
+  min-height: 1.2em;
+  font-size: 11px;
+  color: #9adf8a;
+}

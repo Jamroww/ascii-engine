@@ -22,6 +22,9 @@ export interface HudState {
   /** 0..1 */
   parryCooldownFraction: number;
   parryCooldownSeconds: number;
+  /** Flask charges remaining this attempt. */
+  flaskCharges: number;
+  flaskMax: number;
   /** Boss bar (top-center) — visible only while in aggro range of the boss. */
   bossVisible: boolean;
   bossName: string;
@@ -108,6 +111,9 @@ export class Hud {
   private readonly parryBadge: HTMLDivElement;
   private readonly parrySweep: HTMLDivElement;
   private readonly parryState: HTMLSpanElement;
+
+  private readonly flaskBadge: HTMLDivElement;
+  private readonly flaskState: HTMLSpanElement;
 
   private readonly bossBar: HTMLDivElement;
   private readonly bossName: HTMLSpanElement;
@@ -206,6 +212,13 @@ export class Hud {
               </div>
               <div class="hud-ability__state hud-ability__state--parry">RDY</div>
             </div>
+            <div class="hud-ability hud-ability--flask">
+              <div class="hud-ability__row">
+                <span class="hud-ability__key">[R]</span>
+                <span class="hud-ability__name">Flask</span>
+              </div>
+              <div class="hud-ability__state hud-ability__state--flask">3/3</div>
+            </div>
             <button class="hud-ability hud-inventory-button" type="button">
               <div class="hud-ability__row">
                 <span class="hud-ability__key">[I]</span>
@@ -253,6 +266,9 @@ export class Hud {
     this.parrySweep = this.parryBadge.querySelector('.hud-ability__sweep') as HTMLDivElement;
     this.parryState = this.parryBadge.querySelector('.hud-ability__state--parry') as HTMLSpanElement;
 
+    this.flaskBadge = this.element.querySelector('.hud-ability--flask') as HTMLDivElement;
+    this.flaskState = this.flaskBadge.querySelector('.hud-ability__state--flask') as HTMLSpanElement;
+
     this.bossBar = this.element.querySelector('.hud-bossbar') as HTMLDivElement;
     this.bossName = this.element.querySelector('.hud-bossbar__name') as HTMLSpanElement;
     this.bossSub = this.element.querySelector('.hud-bossbar__sub') as HTMLSpanElement;
@@ -275,6 +291,11 @@ export class Hud {
       this.inventoryButton.classList.remove('is-flashing');
       this.flashTimer = null;
     }, FLASH_DURATION_MS);
+  }
+
+  /** Show/hide the full HUD (hidden on the Start Screen and Death Screen). */
+  public setVisible(visible: boolean): void {
+    this.element.hidden = !visible;
   }
 
   public update(state: HudState): void {
@@ -330,6 +351,11 @@ export class Hud {
       state.parryCooldownFraction,
       state.parryCooldownSeconds
     );
+
+    // Flask plate: shows remaining charges, dimmed when empty.
+    const flaskEmpty = state.flaskCharges <= 0;
+    this.flaskState.textContent = `${state.flaskCharges}/${state.flaskMax}`;
+    this.flaskBadge.classList.toggle('is-empty', flaskEmpty);
 
     // Boss bar (top-center, Doom-styled monochrome).
     this.bossBar.hidden = !state.bossVisible;

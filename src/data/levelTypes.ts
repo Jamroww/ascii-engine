@@ -5,6 +5,8 @@
 // procedural fill, the player spawn, and every manually placed entity. This is
 // the shape the upcoming dev editor will read/write as JSON.
 
+import type { PaletteConfig } from '../core/LevelTheme';
+
 export type EntityKind =
   | 'building'
   | 'tree'
@@ -27,6 +29,29 @@ export interface PlacedEntity {
   purified?: boolean;
   /** Enemy grouping for quest/combat logic (e.g. 'alley', 'patrol', 'boss'). */
   group?: string;
+  /** Y-axis rotation in radians (used by the F2 editor for custom PNG assets). */
+  rotation?: number;
+}
+
+/** Category a user-imported PNG asset can be registered as. */
+export type CustomPngKind = 'prop' | 'building' | 'npc';
+
+/** Geometry style for a user-imported PNG asset. */
+export type CustomPngStyle = 'card' | 'crossed';
+
+/** A user-imported PNG asset registered into the reusable AssetRegistry. */
+export interface CustomPngAsset {
+  id: string;
+  kind: CustomPngKind;
+  /** PNG / WebP / JPEG data URL (persisted in localStorage when it fits). */
+  dataUrl: string;
+  /** World-space height in units. */
+  height: number;
+  /** Collider radius in world units. */
+  radius: number;
+  style: CustomPngStyle;
+  /** Width / height ratio of the source image (defaults to 1 when unknown). */
+  aspectRatio?: number;
 }
 
 /** A single circle within an asset's collider footprint, offset from its origin. */
@@ -47,4 +72,8 @@ export interface LevelData {
   forestSeed: number;
   spawn: { x: number; y: number };
   entities: PlacedEntity[];
+  /** Optional live palette override captured by the Level Exporter. */
+  palette?: PaletteConfig;
+  /** Optional custom PNG assets embedded by the Level Exporter. */
+  customAssets?: CustomPngAsset[];
 }

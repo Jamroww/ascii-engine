@@ -19,6 +19,8 @@ export interface WorldModelPlacement {
   x: number;
   y: number;
   radius: number;
+  /** Y-axis rotation in radians (custom PNG assets; 0 for native models). */
+  rotation?: number;
   colliders?: ColliderSpec[];
 }
 
@@ -230,6 +232,7 @@ export class WorldModelsLayer implements IRenderLayer {
   private buildEntry(placement: WorldModelPlacement): WorldModelEntry {
     const model = AssetRegistry.getModel(placement.assetId, placement.purified);
     model.position.set(placement.x, 0, -placement.y);
+    model.rotation.y = placement.rotation ?? 0;
     setCastShadow(model, true);
     setReceiveShadow(model, true);
     liftWorldModelMaterials(model, placement.kind);

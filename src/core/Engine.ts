@@ -14,10 +14,14 @@ import { EnemyLayer } from '../rendering/EnemyLayer';
 import { Hud } from '../ui/Hud';
 import { DialogueBox } from '../ui/DialogueBox';
 import { InventoryModal } from '../ui/InventoryModal';
+import type { CustomLevelListItem, ModalServices, PlaytestTuning } from '../ui/InventoryModal';
+import { StartScreen } from '../ui/StartScreen';
+import { DeathScreen } from '../ui/DeathScreen';
 import { InventorySystem } from './InventorySystem';
 import { WORLD_BOUNDS, PLAYER_RADIUS } from './world';
 import type { TerrainGrid } from './TerrainGrid';
 import { LevelManager } from './LevelManager';
+import { AssetRegistry } from '../data/AssetRegistry';
 import {
   clonePalette,
   getLevelTheme,
@@ -26,12 +30,24 @@ import {
   type PaletteConfig,
   type PaletteChannel,
 } from './LevelTheme';
-import type { PlacedEntity } from '../data/levelTypes';
+import type { CustomPngAsset, LevelData, PlacedEntity } from '../data/levelTypes';
 
 const HITSTOP_DURATION = 0.028;
 const SHAKE_DURATION = 0.22;
-const RESPAWN_DELAY = 0.8;
 const CAMERA_LEAN_STORAGE_KEY = 'ascii-engine.camera-lean';
+const PLAYTEST_TUNING_KEY = 'ascii-engine.playtest-tuning';
+
+// Health Flask tuning.
+const POTION_COOLDOWN = 0.8;
+const POTION_HEAL_FRACTION = 0.45;
+const POTION_PULSE_DURATION = 0.6;
+
+const DEFAULT_TUNING: PlaytestTuning = {
+  maxHealth: 100,
+  maxStamina: 200,
+  healthRegen: 0,
+  staminaRegen: 22,
+};
 
 // Interaction + Radiant Burst tuning.
 const INTERACT_RANGE = 2.8;
@@ -90,6 +106,8 @@ export class Engine {
   private readonly hud: Hud;
   private readonly dialogueBox: DialogueBox;
   private readonly inventoryModal: InventoryModal;
+  private readonly startScreen: StartScreen;
+  private readonly deathScreen: DeathScreen;
   public readonly stats = new PlayerStats();
   public readonly enemies: EnemyManager;
   private readonly enemyLayer: EnemyLayer;
@@ -135,8 +153,6 @@ export class Engine {
   private shakeIntensity = 0;
   private knockbackX = 0;
   private knockbackY = 0;
-  private respawnPending = false;
-  private respawnTimer = 0;
   private readonly spawnPoint = new THREE.Vector2(0, 0);
 
   // Dash + ability + dialogue state.
@@ -151,6 +167,13 @@ export class Engine {
   private pendingRoninPhase2 = false;
   private roninInteract = false;
   private roninFightActive = false;
+
+  // Screen state (start screen / death screen) + flask state.
+  private startScreenActive = true;
+  private deathScreenActive = false;
+  private deathContext: string | null = null;
+  private potionCooldown = 0;
+  private potionPulseTimer = 0;
 
   // Parry state + live aim direction (world space) for projectile deflects.
   private parryCooldown = 0;
@@ -253,6 +276,29 @@ export class Engine {
 
     this.hud = new Hud(container);
     this.dialogueBox = new DialogueBox(container);
+
+    // Apply persisted playtest tuning before the first level load resets stats.
+    this.applyTuning(this.loadTuning());
+    // Restore any user-imported PNG assets from localStorage.
+    AssetRegistry.loadCustomPngs();
+
+    const services: ModalServices = {
+      getTuning: () => this.getTuning(),
+      setMaxHealth: (v) => this.setMaxHealth(v),
+      setMaxStamina: (v) => this.setMaxStamina(v),
+      setHealthRegen: (v) => this.setHealthRegen(v),
+      setStaminaRegen: (v) => this.setStaminaRegen(v),
+      resetStats: () => this.resetStats(),
+      getCustomAssets: () => AssetRegistry.getCustomPngAssets(),
+      registerPng: (asset) => this.registerCustomPng(asset),
+      deletePng: (id) => this.deleteCustomPng(id),
+      exportLevel: () => this.exportLevelJson(),
+      loadLevelFromJson: (json) => this.loadLevelFromJson(json),
+      getCustomLevels: () => this.getCustomLevels(),
+      playCustomLevel: (id) => this.loadLevel(id),
+      returnToTitle: () => this.returnToTitle(),
+    };
+
     this.inventoryModal = new InventoryModal(
       container,
       this.inventory,
@@ -268,13 +314,30 @@ export class Engine {
         setPaletteChannel: (channel, hex) => this.setPaletteChannel(channel, hex),
         resetPalette: () => this.resetPalette(),
       },
+      services,
     );
+
+    this.startScreen = new StartScreen(container, {
+      onSelectLevel: (id) => this.loadLevel(id),
+      onOpenOptions: () => this.openModalFromTitle('settings'),
+      onOpenAssets: () => this.openModalFromTitle('assets'),
+      getCustomLevels: () => this.getCustomLevels(),
+    });
+
+    this.deathScreen = new DeathScreen(container, {
+      onRetry: () => this.retryAttempt(),
+      onMainMenu: () => this.returnToTitle(),
+    });
 
     // The sidebar [I] button toggles the gear & quest screen.
     this.hud.setInventoryHandler(() => this.toggleInventory());
 
     // Shrine purification heals the player through this handler.
     this.progression.setHealHandler((amount) => this.stats.heal(amount));
+
+    // Start on the Title Screen over the live world; hide the HUD until play.
+    this.startScreen.show();
+    this.hud.setVisible(false);
 
     this.applyViewport();
     this.postProcess.setSize(this.renderer);
@@ -315,16 +378,33 @@ export class Engine {
     this.levelManager = levelManager;
   }
 
-  /** Load a level by id (used by the Settings Level Selector). */
-  public loadLevel(id: 'act1_harbor' | 'act2_wheatfield'): void {
-    const data =
-      id === 'act2_wheatfield'
-        ? LevelManager.createSunsetWheatfieldLevel()
-        : LevelManager.createDefaultVillageLevel();
+  /** Load a level by id (built-in or custom, used by selectors + Start Screen). */
+  public loadLevel(id: string): void {
+    let data: LevelData;
+    if (id === 'act2_wheatfield') {
+      data = LevelManager.createSunsetWheatfieldLevel();
+    } else if (id === 'act1_harbor') {
+      data = LevelManager.createDefaultVillageLevel();
+    } else {
+      const custom = this.levelManager?.getCustomLevel(id);
+      if (!custom) return;
+      data = custom;
+    }
+    this.beginLevelLoad(data);
+  }
+
+  /** Common reset + level handoff, then leave any menu / death screen. */
+  private beginLevelLoad(data: LevelData): void {
     this.pendingRoninStart = false;
     this.pendingRoninPhase2 = false;
     this.roninInteract = false;
     this.roninFightActive = false;
+    this.deathContext = null;
+    this.startScreenActive = false;
+    this.deathScreenActive = false;
+    this.startScreen.hide();
+    this.deathScreen.hide();
+    this.hud.setVisible(true);
     this.levelManager?.loadLevel(data);
     this.closeInventory();
     this.drainGameplayInput();
@@ -511,8 +591,6 @@ export class Engine {
     this.shakeIntensity = 0;
     this.knockbackX = 0;
     this.knockbackY = 0;
-    this.respawnPending = false;
-    this.respawnTimer = 0;
     this.stats.reset();
     this.radiantCooldown = 0;
     this.radiantBurstTimer = 0;
@@ -763,10 +841,11 @@ export class Engine {
 
   private update(dt: number, elapsed: number): void {
     const state = this.input.getState();
+    const screenPaused = this.startScreenActive || this.deathScreenActive;
 
-    // Camera zoom (scroll in / out), paused while a modal is open.
+    // Camera zoom (scroll in / out), paused while a modal or screen is open.
     const wheel = this.input.takeWheelDelta();
-    if (wheel !== 0 && !this.dialogueOpen && !this.inventoryOpen) {
+    if (wheel !== 0 && !this.dialogueOpen && !this.inventoryOpen && !screenPaused) {
       this.viewHeight = THREE.MathUtils.clamp(this.viewHeight * Math.exp(wheel * 0.0015), 9.0, 19.5);
       this.applyViewport();
     }
@@ -776,16 +855,30 @@ export class Engine {
     this.shakeTimer = Math.max(0, this.shakeTimer - dt);
     this.radiantBurstTimer = Math.max(0, this.radiantBurstTimer - dt);
     this.parryFlashTimer = Math.max(0, this.parryFlashTimer - dt);
+    this.potionPulseTimer = Math.max(0, this.potionPulseTimer - dt);
+    this.potionCooldown = Math.max(0, this.potionCooldown - dt);
     const punchDecay = Math.exp(-10 * dt);
     this.punchX *= punchDecay;
     this.punchZ *= punchDecay;
 
-    // I / Tab toggles the inventory & quest screen.
-    if (this.input.consumeInventory()) {
+    if (this.deathScreenActive) {
+      // Fully frozen: pause movement, AI, regen and menus while the overlay shows.
+      this.drainGameplayInput();
+      this.input.consumeHeal();
+      this.input.consumeInventory();
+    } else if (this.startScreenActive) {
+      // Title screen: the world keeps breathing, but gameplay stays frozen.
+      if (this.inventoryOpen) {
+        this.updateInventory();
+      } else {
+        this.drainGameplayInput();
+        this.input.consumeHeal();
+        this.input.consumeInventory();
+      }
+    } else if (this.input.consumeInventory()) {
+      // I / Tab toggles the inventory & quest screen.
       this.toggleInventory();
-    }
-
-    if (this.dialogueOpen) {
+    } else if (this.dialogueOpen) {
       this.updateDialogue();
     } else if (this.inventoryOpen) {
       this.updateInventory();
@@ -794,6 +887,7 @@ export class Engine {
       this.toggleInventory();
     } else if (this.editorMode) {
       this.input.takeAttack();
+      this.input.consumeHeal();
       this.panEditorCamera(dt, state);
     } else if (this.hitstopTimer <= 0) {
       this.updateGameplay(dt, state);
@@ -816,7 +910,9 @@ export class Engine {
       this.radiantBurstTimer > 0
         ? Math.pow(this.radiantBurstTimer / RADIANT_BURST_DURATION, 1.5)
         : 0;
-    this.postProcess.setBurstGlow(burst);
+    // Flask use adds a brief emerald-gold bloom pulse on top of any burst.
+    const potionPulse = this.potionPulseTimer > 0 ? this.potionPulseTimer / POTION_PULSE_DURATION : 0;
+    this.postProcess.setBurstGlow(Math.max(burst, potionPulse));
 
     const parryFlash =
       this.parryFlashTimer > 0 ? this.parryFlashTimer / PARRY_FLASH_DURATION : 0;
@@ -891,15 +987,6 @@ export class Engine {
   }
 
   private updateGameplay(dt: number, state: InputState): void {
-    // Death pause: freeze the world, then respawn at the level's spawn point.
-    if (this.respawnPending) {
-      this.respawnTimer -= dt;
-      if (this.respawnTimer <= 0) {
-        this.doRespawn();
-      }
-      return;
-    }
-
     // Feed corruption to the stats for Blight Dash + move-speed bonuses.
     this.stats.corruption = this.progression.corruption;
 
@@ -929,6 +1016,11 @@ export class Engine {
     // Parry (Right-Click).
     if (this.input.consumeParry()) {
       this.tryParry();
+    }
+
+    // Health Flask (R).
+    if (this.input.consumeHeal()) {
+      this.consumePotion();
     }
 
     this.radiantCooldown = Math.max(0, this.radiantCooldown - dt);
@@ -1023,10 +1115,10 @@ export class Engine {
       this.hud.flashInventoryButton();
     }
 
-    // Register death once, then hand off to the respawn pause.
+    // Register death once, then hand off to the Death Screen.
     if (this.stats.isDead) {
-      this.respawnPending = true;
-      this.respawnTimer = RESPAWN_DELAY;
+      this.showDeathScreen();
+      return;
     }
 
     // Act 1 quest: alley ambush -> survivors -> castle warden -> completed.
@@ -1066,6 +1158,8 @@ export class Engine {
       parryReady: this.parryCooldown <= 0 && this.stats.stamina >= PARRY_STAMINA_COST,
       parryCooldownFraction: this.parryCooldown > 0 ? this.parryCooldown / PARRY_COOLDOWN : 0,
       parryCooldownSeconds: this.parryCooldown,
+      flaskCharges: this.stats.potions,
+      flaskMax: this.stats.maxPotions,
       bossVisible,
       bossName,
       bossSubtitle,
@@ -1361,20 +1455,220 @@ export class Engine {
     this.hud.showToast('The Ronin accepts your challenge.');
   }
 
-  private doRespawn(): void {
-    this.respawnPending = false;
-    this.stats.reset();
-    this.enemies.reset();
-    this.roninFightActive = false;
-    this.roninInteract = false;
-    this.pendingRoninStart = false;
-    this.pendingRoninPhase2 = false;
-    this.playerPos.set(this.spawnPoint.x, this.spawnPoint.y);
-    this.knockbackX = 0;
-    this.knockbackY = 0;
-    this.camera.position.set(this.spawnPoint.x, CAMERA_HEIGHT, -this.spawnPoint.y + CAMERA_BACK);
-    this.camera.lookAt(this.spawnPoint.x, LOOK_HEIGHT, -this.spawnPoint.y);
-    this.camera.updateMatrixWorld(true);
+  // --- Screen / death / retry state ------------------------------------------
+
+  /** Record the death context (e.g. the Ronin's pre-fight draw counter). */
+  public setDeathContext(text: string): void {
+    this.deathContext = text;
+  }
+
+  /** Open the Settings / Assets modal from the Title Screen. */
+  private openModalFromTitle(tab: 'settings' | 'assets'): void {
+    this.inventoryOpen = true;
+    this.inventoryModal.openTo(tab);
+  }
+
+  /** Show the Death Screen with an optional death-context subtitle. */
+  private showDeathScreen(): void {
+    this.deathScreenActive = true;
+    this.hud.setVisible(false);
+    this.deathScreen.show(this.deathContext ?? undefined);
+  }
+
+  /** Retry the current level with full HP, stamina, flasks and fresh enemies. */
+  public retryAttempt(): void {
+    const data = this.levelManager?.getLevelData();
+    if (!data) return;
+    this.beginLevelLoad(data);
+  }
+
+  /** Return cleanly to the Title Screen (from Settings or the Death Screen). */
+  public returnToTitle(): void {
+    this.startScreenActive = true;
+    this.deathScreenActive = false;
+    this.deathScreen.hide();
+    this.closeInventory();
+    this.hud.setVisible(false);
+    this.drainGameplayInput();
+    this.startScreen.show();
+  }
+
+  // --- Health Flask ----------------------------------------------------------
+
+  /** Consume a flask charge (R key): heal 45% max HP with visual/audio cues. */
+  private consumePotion(): void {
+    if (this.stats.potions <= 0) {
+      this.hud.showToast('No flasks remaining');
+      return;
+    }
+    if (this.potionCooldown > 0) return;
+    if (this.stats.health >= this.stats.maxHealth) return; // don't waste a charge
+
+    this.stats.potions -= 1;
+    const before = this.stats.health;
+    this.stats.heal(Math.round(this.stats.maxHealth * POTION_HEAL_FRACTION));
+    const healed = Math.round(this.stats.health - before);
+
+    this.potionCooldown = POTION_COOLDOWN;
+    this.potionPulseTimer = POTION_PULSE_DURATION;
+    this.triggerScreenFlash(0.12);
+    this.playPotionChime();
+    this.hud.showToast(`Flask used (+${healed} HP)`);
+  }
+
+  /** Soft two-tone chime for flask use (Web Audio, best-effort). */
+  private playPotionChime(): void {
+    try {
+      if (!this.audioContext) {
+        const Ctor =
+          (window as { AudioContext?: typeof AudioContext }).AudioContext ??
+          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!Ctor) return;
+        this.audioContext = new Ctor();
+      }
+      const ctx = this.audioContext;
+      if (ctx.state === 'suspended') void ctx.resume();
+
+      const now = ctx.currentTime;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.2, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+      gain.connect(ctx.destination);
+
+      const freqs = [880, 1318.5];
+      for (let i = 0; i < freqs.length; i++) {
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freqs[i], now + i * 0.09);
+        osc.connect(gain);
+        osc.start(now + i * 0.09);
+        osc.stop(now + i * 0.09 + 0.42);
+      }
+    } catch {
+      // Audio is best-effort.
+    }
+  }
+
+  // --- Playtest tuning -------------------------------------------------------
+
+  public getTuning(): PlaytestTuning {
+    return {
+      maxHealth: this.stats.getBaseMaxHealth(),
+      maxStamina: this.stats.getBaseMaxStamina(),
+      healthRegen: this.stats.getHealthRegen(),
+      staminaRegen: this.stats.getStaminaRegen(),
+    };
+  }
+
+  public setMaxHealth(v: number): void {
+    this.stats.setBaseMaxHealth(v);
+    this.saveTuning();
+  }
+
+  public setMaxStamina(v: number): void {
+    this.stats.setBaseMaxStamina(v);
+    this.saveTuning();
+  }
+
+  public setHealthRegen(v: number): void {
+    this.stats.setHealthRegen(v);
+    this.saveTuning();
+  }
+
+  public setStaminaRegen(v: number): void {
+    this.stats.setStaminaRegen(v);
+    this.saveTuning();
+  }
+
+  public resetStats(): void {
+    this.applyTuning({ ...DEFAULT_TUNING });
+    this.saveTuning();
+  }
+
+  private applyTuning(tuning: PlaytestTuning): void {
+    this.stats.setBaseMaxHealth(tuning.maxHealth);
+    this.stats.setBaseMaxStamina(tuning.maxStamina);
+    this.stats.setHealthRegen(tuning.healthRegen);
+    this.stats.setStaminaRegen(tuning.staminaRegen);
+  }
+
+  private saveTuning(): void {
+    try {
+      localStorage.setItem(PLAYTEST_TUNING_KEY, JSON.stringify(this.getTuning()));
+    } catch {
+      // Storage unavailable.
+    }
+  }
+
+  private loadTuning(): PlaytestTuning {
+    try {
+      const raw = localStorage.getItem(PLAYTEST_TUNING_KEY);
+      if (!raw) return { ...DEFAULT_TUNING };
+      const parsed = JSON.parse(raw) as Partial<PlaytestTuning>;
+      return {
+        maxHealth: typeof parsed.maxHealth === 'number' ? parsed.maxHealth : DEFAULT_TUNING.maxHealth,
+        maxStamina: typeof parsed.maxStamina === 'number' ? parsed.maxStamina : DEFAULT_TUNING.maxStamina,
+        healthRegen: typeof parsed.healthRegen === 'number' ? parsed.healthRegen : DEFAULT_TUNING.healthRegen,
+        staminaRegen: typeof parsed.staminaRegen === 'number' ? parsed.staminaRegen : DEFAULT_TUNING.staminaRegen,
+      };
+    } catch {
+      return { ...DEFAULT_TUNING };
+    }
+  }
+
+  // --- Custom PNG assets & level loader --------------------------------------
+
+  public registerCustomPng(asset: CustomPngAsset): void {
+    AssetRegistry.registerCustomPng(asset);
+  }
+
+  public deleteCustomPng(id: string): void {
+    AssetRegistry.removeCustomPng(id);
+  }
+
+  public exportLevelJson(): void {
+    const data = this.levelManager?.exportLevelData();
+    if (!data) return;
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${data.id}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
+  public loadLevelFromJson(json: string): { ok: boolean; error?: string; id?: string } {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      return { ok: false, error: 'Invalid JSON' };
+    }
+    if (!this.isLevelData(parsed)) {
+      return { ok: false, error: 'Not a valid level file' };
+    }
+    this.levelManager?.addCustomLevel(parsed);
+    this.beginLevelLoad(parsed);
+    return { ok: true, id: parsed.id };
+  }
+
+  public getCustomLevels(): CustomLevelListItem[] {
+    return (this.levelManager?.getCustomLevels() ?? []).map((lvl) => ({
+      id: lvl.id,
+      name: lvl.name,
+    }));
+  }
+
+  private isLevelData(value: unknown): value is LevelData {
+    if (typeof value !== 'object' || value === null) return false;
+    const obj = value as Record<string, unknown>;
+    return (
+      typeof obj.id === 'string' &&
+      typeof obj.terrainBase64 === 'string' &&
+      Array.isArray(obj.entities)
+    );
   }
 
   /** WASD/arrow panning across the world while the editor is active. */
@@ -1407,6 +1701,8 @@ export class Engine {
     this.hud.dispose();
     this.dialogueBox.dispose();
     this.inventoryModal.dispose();
+    this.startScreen.dispose();
+    this.deathScreen.dispose();
     for (const layer of this.layers) {
       layer.dispose();
     }

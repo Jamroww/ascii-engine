@@ -13,9 +13,25 @@ import * as THREE from 'three';
  *   B — footpath / village clearing mask: 0 == wild, 255 == cleared path,
  *       with 128 used for the softer village/trail clearing (no trees, but
  *       still grass/moss). See the PATH_* constants below.
- *   A — terrain modifier: 0 == normal, 128 == mud/slow, 255 == impassable
- *       (reserved for future biomes).
+ *   A — live Grass Override Paint Mask. 128 == neutral (follow the normal
+ *       terrain/path/water/clearing rules). > 180 forces grass ON (paint lush
+ *       grass/wheat anywhere on dry land); < 75 forces grass OFF (carve clean
+ *       grass-free courtyards/plazas/trails).
  */
+
+/** Grass override thresholds for the A channel (see GrassLayer shader). */
+export const GRASS_OVERRIDE_NEUTRAL = 128;
+export const GRASS_FORCE_ON_THRESHOLD = 180;
+export const GRASS_FORCE_OFF_THRESHOLD = 75;
+
+export type TerrainBrushMode =
+  | 'grass_add'
+  | 'grass_erase'
+  | 'path'
+  | 'water'
+  | 'land'
+  | 'blight_add'
+  | 'blight_clear';
 
 export const SDF_RANGE = 8.0;
 
@@ -314,6 +330,61 @@ export class TerrainGrid {
   }
 
   /**
+   * Paint a terrain/grass brush stroke with a soft falloff. Maps the editor's
+   * brush modes onto the backing RGBA `Uint8Array` and flags the texture dirty
+   * so `GrassLayer` / `WaterLayer` / `GroundLayer` pick the change up.
+   */
+  public paintTerrainBrush(
+    wx: number,
+    wy: number,
+    radius: number,
+    mode: TerrainBrushMode,
+  ): void {
+    const softness = radius * 0.3;
+    switch (mode) {
+      case 'grass_add':
+        // Force grass ON: push A well above the force-on threshold.
+        this.paintCircle(wx, wy, radius, 3, 1, softness);
+        break;
+      case 'grass_erase':
+        // Force grass OFF: drop A well below the force-off threshold.
+        this.paintCircle(wx, wy, radius, 3, 0, softness);
+        break;
+      case 'path':
+        this.paintCircle(wx, wy, radius, 2, 1, softness);
+        break;
+      case 'water':
+        // R below 128 == inside the river channel.
+        this.paintCircle(wx, wy, radius, 0, 40 / 255, softness);
+        break;
+      case 'land':
+        // R at 255 == dry land (far outside the river SDF).
+        this.paintCircle(wx, wy, radius, 0, 1, softness);
+        break;
+      case 'blight_add':
+        this.paintCircle(wx, wy, radius, 1, 1, softness);
+        break;
+      case 'blight_clear':
+        this.paintCircle(wx, wy, radius, 1, 0, softness);
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** Serialize the full RGBA terrain (including the grass override mask). */
+  public exportOverrides(): string {
+    return this.toBase64();
+  }
+
+  /** Replace the live terrain bytes from a serialized override blob. */
+  public importOverrides(base64: string): void {
+    const other = TerrainGrid.fromBase64(base64, this.resolution, this.worldSize);
+    this.data.set(other.data);
+    this.texture.needsUpdate = true;
+  }
+
+  /**
    * Bake the Act 2 golden sunset wheatfield: an 80x80 dry rolling plain with no
    * river, a circular beaten-earth dueling clearing around (0,0), and a dirt
    * approach path coming north from the south spawn.
@@ -342,8 +413,8 @@ export class TerrainGrid {
         const mask = Math.max(clearing, path);
         grid.data[grid.index(ix, iy, 2)] = Math.round(clamp(mask, 0, 1) * 255);
 
-        // A — no terrain modifier.
-        grid.data[grid.index(ix, iy, 3)] = 0;
+        // A — neutral grass override (follow normal terrain rules).
+        grid.data[grid.index(ix, iy, 3)] = GRASS_OVERRIDE_NEUTRAL;
       }
     }
 
@@ -390,7 +461,7 @@ export class TerrainGrid {
           smoothstep(6.5, 16.0, wy + Math.sin(wx * 0.5) * 1.6) * 255
         );
         grid.data[grid.index(ix, iy, 2)] = pathMaskByte(wx, wy);
-        grid.data[grid.index(ix, iy, 3)] = 0;
+        grid.data[grid.index(ix, iy, 3)] = GRASS_OVERRIDE_NEUTRAL;
       }
     }
 
@@ -415,7 +486,7 @@ export class TerrainGrid {
         grid.data[grid.index(ix, iy, 0)] = TerrainGrid.encodeSdf(act1WaterSDF(wx, wy));
         grid.data[grid.index(ix, iy, 1)] = act1BlightByte(wx, wy);
         grid.data[grid.index(ix, iy, 2)] = act1PathMaskByte(wx, wy);
-        grid.data[grid.index(ix, iy, 3)] = 0;
+        grid.data[grid.index(ix, iy, 3)] = GRASS_OVERRIDE_NEUTRAL;
       }
     }
 

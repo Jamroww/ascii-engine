@@ -27,7 +27,7 @@ import {
 } from '../rendering/ForestLayer';
 import { LANDMARK_PROP_MODEL_FACTORIES } from '../rendering/Lvl1';
 import { LVL2_MODEL_FACTORIES } from '../rendering/Lvl2';
-import type { ColliderSpec, EntityKind } from './levelTypes';
+import type { ColliderSpec, CustomPngAsset, EntityKind } from './levelTypes';
 
 type BuildingFactory = () => BuildingAsset;
 type TreeFactory = () => TreeAsset;
@@ -285,9 +285,144 @@ const modelAssets = new Map<string, ModelAssetEntry>([
   ],
 ]);
 
+// ---------------------------------------------------------------------------
+// User-imported PNG asset library (PNG-to-Asset Importer). Each asset is a
+// crisp alpha-cutout billboard (or crossed pair) built from a data URL texture,
+// registered into the unified `modelAssets` registry above so it behaves like
+// any native 3D model.
+// ---------------------------------------------------------------------------
+
+const CUSTOM_PNG_STORAGE_KEY = 'ascii-engine.custom-png-assets';
+
+const customPngAssets = new Map<string, CustomPngAsset>();
+const customPngTextures = new Map<string, THREE.Texture>();
+
+/**
+ * Build a crisp alpha-cutout billboard group from a custom PNG asset. `card`
+ * is a single upright plane tilted to face the 3/4 camera pitch; `crossed` is
+ * two perpendicular planes so the image reads with 3D volume from all angles.
+ */
+function buildCustomPngModel(asset: CustomPngAsset, texture: THREE.Texture): THREE.Group {
+  const group = new THREE.Group();
+  const ar = asset.aspectRatio && asset.aspectRatio > 0 ? asset.aspectRatio : 1;
+  const width = asset.height * ar;
+  const height = asset.height;
+  const yBase = height / 2;
+
+  // Unlit basic material keeps the uploaded image's exact colours (never tinted
+  // by the palette's Structure channel); alphaTest gives a crisp cutout.
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    alphaTest: 0.35,
+    transparent: false,
+    side: THREE.DoubleSide,
+  });
+
+  if (asset.style === 'crossed') {
+    const geometry = new THREE.PlaneGeometry(width, height);
+    for (const rotY of [0, Math.PI / 2]) {
+      const plane = new THREE.Mesh(geometry, material);
+      plane.castShadow = true;
+      plane.receiveShadow = true;
+      plane.position.y = yBase;
+      plane.rotation.y = rotY;
+      group.add(plane);
+    }
+  } else {
+    const geometry = new THREE.PlaneGeometry(width, height);
+    const plane = new THREE.Mesh(geometry, material);
+    plane.castShadow = true;
+    plane.receiveShadow = true;
+    plane.position.y = yBase;
+    // Tilt back so the card faces the elevated 3/4 camera pitch.
+    plane.rotation.x = -0.5;
+    group.add(plane);
+  }
+
+  return group;
+}
+
 export class AssetRegistry {
   private constructor() {
     // Namespace-style holder; all state is module-level maps above.
+  }
+
+  // --- User-imported PNG assets ----------------------------------------------
+
+  /** Register (or replace) a user-imported PNG asset in the reusable library. */
+  public static registerCustomPng(asset: CustomPngAsset): void {
+    const id = asset.id;
+    if (customPngAssets.has(id)) {
+      AssetRegistry.removeCustomPng(id);
+    }
+
+    const texture = new THREE.TextureLoader().load(asset.dataUrl);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.generateMipmaps = true;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    customPngAssets.set(id, asset);
+    customPngTextures.set(id, texture);
+
+    // Register a factory in the unified model registry so it is immediately
+    // selectable in the F2 editor and renderable by WorldModelsLayer, exactly
+    // like a native 3D model — it is *not* dropped into the level automatically.
+    modelAssets.set(id, {
+      kind: asset.kind,
+      factory: () => buildCustomPngModel(asset, texture),
+      radius: asset.radius,
+    });
+
+    AssetRegistry.saveCustomPngs();
+  }
+
+  /** Remove a user-imported PNG asset from the library (disposes its texture). */
+  public static removeCustomPng(id: string): void {
+    const texture = customPngTextures.get(id);
+    if (texture) texture.dispose();
+    customPngTextures.delete(id);
+    customPngAssets.delete(id);
+    modelAssets.delete(id);
+    AssetRegistry.saveCustomPngs();
+  }
+
+  public static isCustomPng(id: string): boolean {
+    return customPngAssets.has(id);
+  }
+
+  public static getCustomPng(id: string): CustomPngAsset | undefined {
+    return customPngAssets.get(id);
+  }
+
+  /** Every registered custom PNG asset (for the Assets & Levels tab). */
+  public static getCustomPngAssets(): CustomPngAsset[] {
+    return [...customPngAssets.values()];
+  }
+
+  /** Persist custom PNG definitions (data URLs) to localStorage, best-effort. */
+  public static saveCustomPngs(): void {
+    try {
+      const list = [...customPngAssets.values()];
+      localStorage.setItem(CUSTOM_PNG_STORAGE_KEY, JSON.stringify(list));
+    } catch {
+      // Quota exceeded / storage unavailable — assets still work this session.
+    }
+  }
+
+  /** Restore persisted custom PNG assets on startup. */
+  public static loadCustomPngs(): void {
+    try {
+      const raw = localStorage.getItem(CUSTOM_PNG_STORAGE_KEY);
+      if (!raw) return;
+      const list = JSON.parse(raw) as CustomPngAsset[];
+      for (const asset of list) {
+        if (typeof asset.id !== 'string' || typeof asset.dataUrl !== 'string') continue;
+        AssetRegistry.registerCustomPng(asset);
+      }
+    } catch {
+      // Ignore corrupt persisted assets.
+    }
   }
 
   // --- Legacy ASCII assets ---------------------------------------------------

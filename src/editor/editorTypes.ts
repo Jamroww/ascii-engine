@@ -1,6 +1,18 @@
 // Shared editor state types, kept separate from the controller/panel so both can
 // import them without introducing a runtime import cycle.
 
-export type Tool = 'brush' | 'place' | 'select';
+/** Top-level editor mode: place assets, or paint terrain & grass brushes. */
+export type EditorMode = 'place' | 'terrain';
 
-export type BrushKind = 'river' | 'blight' | 'path' | 'clearing';
+/** Sub-tools inside the Place Assets mode. */
+export type PlaceTool = 'place' | 'select';
+
+/** Terrain & grass brush kinds (mirrors TerrainGrid.TerrainBrushMode). */
+export type TerrainBrushKind =
+  | 'grass_add'
+  | 'grass_erase'
+  | 'path'
+  | 'water'
+  | 'land'
+  | 'blight_add'
+  | 'blight_clear';

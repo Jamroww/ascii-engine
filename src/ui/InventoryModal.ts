@@ -3,6 +3,7 @@ import type { ProgressionSystem, QuestStage } from '../core/ProgressionSystem';
 import type { PaletteChannel, PaletteConfig } from '../core/LevelTheme';
 import { getItem } from '../data/items';
 import type { EquippableItem } from '../data/items';
+import type { CustomPngAsset, CustomPngKind, CustomPngStyle } from '../data/levelTypes';
 
 interface QuestStep {
   label: string;
@@ -53,12 +54,46 @@ export interface CameraLeanControls {
 
 /** Level selection + palette hooks wired by the Engine. */
 export interface SettingsControls {
-  getActiveLevelId: () => 'act1_harbor' | 'act2_wheatfield';
-  loadLevel: (id: 'act1_harbor' | 'act2_wheatfield') => void;
+  getActiveLevelId: () => string;
+  loadLevel: (id: string) => void;
   getPalette: () => PaletteConfig;
   setPaletteChannel: (channel: PaletteChannel, hex: string) => void;
   resetPalette: () => void;
 }
+
+/** Playtest stat tuning values (persisted by the Engine). */
+export interface PlaytestTuning {
+  maxHealth: number;
+  maxStamina: number;
+  healthRegen: number;
+  staminaRegen: number;
+}
+
+/** A selectable custom level shown in the Level Select / Settings lists. */
+export interface CustomLevelListItem {
+  id: string;
+  name: string;
+}
+
+/** Engine-backed services the modal uses for playtest tuning, assets & levels. */
+export interface ModalServices {
+  getTuning(): PlaytestTuning;
+  setMaxHealth(v: number): void;
+  setMaxStamina(v: number): void;
+  setHealthRegen(v: number): void;
+  setStaminaRegen(v: number): void;
+  resetStats(): void;
+  getCustomAssets(): CustomPngAsset[];
+  registerPng(asset: CustomPngAsset): void;
+  deletePng(id: string): void;
+  exportLevel(): void;
+  loadLevelFromJson(json: string): { ok: boolean; error?: string; id?: string };
+  getCustomLevels(): CustomLevelListItem[];
+  playCustomLevel(id: string): void;
+  returnToTitle(): void;
+}
+
+type Tab = 'gear' | 'quests' | 'settings' | 'assets';
 
 // --- HSV colour helpers ------------------------------------------------------
 
@@ -143,13 +178,20 @@ export class InventoryModal {
   private readonly progression: ProgressionSystem;
   private readonly cameraLean: CameraLeanControls;
   private readonly settings: SettingsControls;
+  private readonly services: ModalServices;
   private readonly bodyEl: HTMLDivElement;
   private readonly gearTabEl: HTMLButtonElement;
   private readonly questTabEl: HTMLButtonElement;
   private readonly settingsTabEl: HTMLButtonElement;
+  private readonly assetsTabEl: HTMLButtonElement;
 
   private active = false;
-  private tab: 'gear' | 'quests' | 'settings' = 'gear';
+  private tab: Tab = 'gear';
+
+  // Pending PNG import form state (Populated when a file is picked).
+  private pendingDataUrl = '';
+  private pendingAspectRatio = 1;
+  private pendingId = '';
 
   // Palette studio state (re-initialised on each channel switch).
   private paletteChannel: PaletteChannel = 'foliageBase';
@@ -163,11 +205,13 @@ export class InventoryModal {
     progression: ProgressionSystem,
     cameraLean: CameraLeanControls,
     settings: SettingsControls,
+    services: ModalServices,
   ) {
     this.inventory = inventory;
     this.progression = progression;
     this.cameraLean = cameraLean;
     this.settings = settings;
+    this.services = services;
 
     this.element = document.createElement('div');
     this.element.className = 'inventory-modal';
@@ -182,6 +226,7 @@ export class InventoryModal {
           <button class="inventory-modal__tab" data-tab="gear">Gear &amp; Bag</button>
           <button class="inventory-modal__tab" data-tab="quests">Quests</button>
           <button class="inventory-modal__tab" data-tab="settings">Settings</button>
+          <button class="inventory-modal__tab" data-tab="assets">Assets &amp; Levels</button>
         </div>
         <div class="inventory-modal__body"></div>
       </div>
@@ -192,6 +237,7 @@ export class InventoryModal {
     this.gearTabEl = this.element.querySelector('[data-tab="gear"]') as HTMLButtonElement;
     this.questTabEl = this.element.querySelector('[data-tab="quests"]') as HTMLButtonElement;
     this.settingsTabEl = this.element.querySelector('[data-tab="settings"]') as HTMLButtonElement;
+    this.assetsTabEl = this.element.querySelector('[data-tab="assets"]') as HTMLButtonElement;
 
     this.element.querySelector('.inventory-modal__tabs')?.addEventListener('click', (event) => {
       const target = event.target as HTMLElement;
@@ -199,6 +245,7 @@ export class InventoryModal {
       if (!tab) return;
       if (tab.dataset.tab === 'quests') this.tab = 'quests';
       else if (tab.dataset.tab === 'settings') this.tab = 'settings';
+      else if (tab.dataset.tab === 'assets') this.tab = 'assets';
       else this.tab = 'gear';
       this.render();
     });
@@ -214,9 +261,8 @@ export class InventoryModal {
       }
 
       const levelBtn = target.closest('[data-level]') as HTMLElement | null;
-      if (levelBtn) {
-        const id = levelBtn.dataset.level as 'act1_harbor' | 'act2_wheatfield';
-        this.settings.loadLevel(id);
+      if (levelBtn?.dataset.level) {
+        this.settings.loadLevel(levelBtn.dataset.level);
         return;
       }
 
@@ -240,6 +286,44 @@ export class InventoryModal {
         return;
       }
 
+      const returnTitle = target.closest('[data-return-to-title]') as HTMLElement | null;
+      if (returnTitle) {
+        this.services.returnToTitle();
+        return;
+      }
+
+      const resetStats = target.closest('[data-reset-stats]') as HTMLElement | null;
+      if (resetStats) {
+        this.services.resetStats();
+        this.render();
+        return;
+      }
+
+      const addPng = target.closest('[data-add-png]') as HTMLElement | null;
+      if (addPng) {
+        this.submitPngImport();
+        return;
+      }
+
+      const deletePng = target.closest('[data-delete-png]') as HTMLElement | null;
+      if (deletePng?.dataset.deletePng) {
+        this.services.deletePng(deletePng.dataset.deletePng);
+        this.render();
+        return;
+      }
+
+      const exportLevel = target.closest('[data-export-level]') as HTMLElement | null;
+      if (exportLevel) {
+        this.services.exportLevel();
+        return;
+      }
+
+      const playCustom = target.closest('[data-play-custom]') as HTMLElement | null;
+      if (playCustom?.dataset.playCustom) {
+        this.services.playCustomLevel(playCustom.dataset.playCustom);
+        return;
+      }
+
       const item = target.closest('[data-equip]') as HTMLElement | null;
       if (!item || !item.dataset.equip) return;
       this.inventory.equip(item.dataset.equip);
@@ -252,8 +336,13 @@ export class InventoryModal {
   }
 
   open(): void {
+    this.openTo('gear');
+  }
+
+  /** Open directly to a specific tab (used by the Start Screen buttons). */
+  openTo(tab: Tab): void {
     this.active = true;
-    this.tab = 'gear';
+    this.tab = tab;
     this.element.hidden = false;
     this.render();
   }
@@ -271,13 +360,17 @@ export class InventoryModal {
     this.gearTabEl.classList.toggle('is-active', this.tab === 'gear');
     this.questTabEl.classList.toggle('is-active', this.tab === 'quests');
     this.settingsTabEl.classList.toggle('is-active', this.tab === 'settings');
+    this.assetsTabEl.classList.toggle('is-active', this.tab === 'assets');
     if (this.tab === 'gear') {
       this.bodyEl.innerHTML = this.renderGear();
     } else if (this.tab === 'quests') {
       this.bodyEl.innerHTML = this.renderQuests();
-    } else {
+    } else if (this.tab === 'settings') {
       this.bodyEl.innerHTML = this.renderSettings();
       this.bindSettingsInteractions();
+    } else {
+      this.bodyEl.innerHTML = this.renderAssets();
+      this.bindAssetsInteractions();
     }
   }
 
@@ -361,9 +454,26 @@ export class InventoryModal {
     const enabled = this.cameraLean.getCameraLeanEnabled();
     const state = enabled ? 'ON' : 'OFF';
     const activeLevel = this.settings.getActiveLevelId();
+    const tuning = this.services.getTuning();
 
-    const channelsHtml = this.renderChannelGroup('Environment', ENVIRONMENT_CHANNELS) +
+    const customLevels = this.services
+      .getCustomLevels()
+      .map(
+        (lvl) =>
+          `<button class="inventory-modal__level ${activeLevel === lvl.id ? 'is-active' : ''}" data-level="${lvl.id}">${lvl.name}</button>`
+      )
+      .join('');
+
+    const channelsHtml =
+      this.renderChannelGroup('Environment', ENVIRONMENT_CHANNELS) +
       this.renderChannelGroup('Lighting', LIGHTING_CHANNELS);
+
+    const sliders = [
+      this.renderStatSlider('maxHealth', 'Max Health', tuning.maxHealth, 50, 500, 10, ''),
+      this.renderStatSlider('maxStamina', 'Max Stamina', tuning.maxStamina, 50, 500, 10, ''),
+      this.renderStatSlider('healthRegen', 'Health Regen', tuning.healthRegen, 0, 25, 0.5, ' HP/s'),
+      this.renderStatSlider('staminaRegen', 'Stamina Regen', tuning.staminaRegen, 5, 120, 5, ' ST/s'),
+    ].join('');
 
     return `
       <div class="inventory-modal__settings">
@@ -373,6 +483,7 @@ export class InventoryModal {
         <div class="inventory-modal__level-row">
           <button class="inventory-modal__level ${activeLevel === 'act1_harbor' ? 'is-active' : ''}" data-level="act1_harbor">[1] Harbor Village (Night)</button>
           <button class="inventory-modal__level ${activeLevel === 'act2_wheatfield' ? 'is-active' : ''}" data-level="act2_wheatfield">[2] Sunset Wheatfield (The Ronin)</button>
+          ${customLevels}
         </div>
 
         <div class="inventory-modal__slot-label">CAMERA</div>
@@ -380,6 +491,12 @@ export class InventoryModal {
           <span class="inventory-modal__toggle-label">Camera Lean (A/D)</span>
           <span class="inventory-modal__toggle-state ${enabled ? 'is-on' : 'is-off'}">${state}</span>
         </button>
+
+        <div class="inventory-modal__slot-label">PLAYTEST TUNING</div>
+        <div class="inventory-modal__stat-sliders">
+          ${sliders}
+          <button class="inventory-modal__action" data-reset-stats type="button">Reset Stats</button>
+        </div>
 
         <div class="inventory-modal__slot-label">PALETTE STUDIO</div>
         <div class="inventory-modal__palette">
@@ -400,8 +517,230 @@ export class InventoryModal {
             <button class="inventory-modal__action" data-copy-palette type="button">Copy Palette</button>
           </div>
         </div>
+
+        <button class="inventory-modal__action" data-return-to-title type="button">[ Return to Title Screen ]</button>
       </div>
     `;
+  }
+
+  /** Render one playtest tuning slider row with a live numeric readout. */
+  private renderStatSlider(
+    key: string,
+    label: string,
+    value: number,
+    min: number,
+    max: number,
+    step: number,
+    unit: string,
+  ): string {
+    return `
+      <div class="inventory-modal__stat-slider">
+        <div class="inventory-modal__stat-slider-head">
+          <span class="inventory-modal__stat-slider-label">${label}</span>
+          <span class="inventory-modal__stat-slider-value" data-readout="${key}">${value}${unit}</span>
+        </div>
+        <input type="range" min="${min}" max="${max}" step="${step}" value="${value}" data-stat="${key}" />
+      </div>
+    `;
+  }
+
+  /** Render the Assets & Levels tab (PNG importer + level loader/exporter). */
+  private renderAssets(): string {
+    const assets = this.services.getCustomAssets();
+    const assetRows =
+      assets.length === 0
+        ? '<div class="inventory-modal__empty">No custom PNG assets yet.</div>'
+        : assets
+            .map(
+              (a) => `
+                <div class="inventory-modal__custom-asset">
+                  <img class="inventory-modal__custom-thumb" src="${a.dataUrl}" alt="${a.id}" />
+                  <div class="inventory-modal__custom-meta">
+                    <span class="inventory-modal__custom-id">${a.id}</span>
+                    <span class="inventory-modal__custom-detail">${a.kind} · ${a.height}u · r${a.radius} · ${a.style}</span>
+                  </div>
+                  <button class="inventory-modal__action inventory-modal__action--danger" data-delete-png="${a.id}" type="button">Delete</button>
+                </div>`
+            )
+            .join('');
+
+    const customLevels = this.services
+      .getCustomLevels()
+      .map(
+        (lvl) =>
+          `<button class="inventory-modal__level" data-play-custom="${lvl.id}" type="button">${lvl.name}</button>`
+      )
+      .join('');
+
+    return `
+      <div class="inventory-modal__assets">
+        <div class="inventory-modal__slot-label">PNG-TO-ASSET LIBRARY IMPORTER</div>
+        <div class="inventory-modal__importer">
+          <div class="inventory-modal__file-row">
+            <label class="inventory-modal__file-label">
+              <input type="file" accept="image/png,image/webp,image/jpeg" data-png-file />
+              <span>Choose image…</span>
+            </label>
+            <img class="inventory-modal__file-thumb" data-png-thumb alt="preview" />
+          </div>
+          <div class="inventory-modal__field-row">
+            <span class="inventory-modal__field-label">Asset ID</span>
+            <input class="inventory-modal__hex" type="text" data-png-id spellcheck="false" />
+          </div>
+          <div class="inventory-modal__field-row">
+            <span class="inventory-modal__field-label">Category</span>
+            <select data-png-kind>
+              <option value="prop">prop</option>
+              <option value="building">building</option>
+              <option value="npc">npc</option>
+            </select>
+          </div>
+          <div class="inventory-modal__field-row">
+            <span class="inventory-modal__field-label">World Height <b data-readout="height">2.5</b></span>
+            <input type="range" min="0.8" max="10" step="0.1" value="2.5" data-png-height />
+          </div>
+          <div class="inventory-modal__field-row">
+            <span class="inventory-modal__field-label">Collider Radius <b data-readout="radius">0.8</b></span>
+            <input type="range" min="0" max="4" step="0.1" value="0.8" data-png-radius />
+          </div>
+          <div class="inventory-modal__field-row">
+            <span class="inventory-modal__field-label">Geometry</span>
+            <select data-png-style>
+              <option value="card">card</option>
+              <option value="crossed">crossed</option>
+            </select>
+          </div>
+          <button class="inventory-modal__action" data-add-png type="button">[ Add to Asset Library ]</button>
+        </div>
+
+        <div class="inventory-modal__slot-label">REGISTERED CUSTOM PNG ASSETS</div>
+        <div class="inventory-modal__custom-list">${assetRows}</div>
+
+        <div class="inventory-modal__slot-label">LEVEL LOADER &amp; EXPORTER</div>
+        <div class="inventory-modal__level-actions">
+          <button class="inventory-modal__action" data-export-level type="button">[ Export Active Level (.json) ]</button>
+          <label class="inventory-modal__action inventory-modal__file-action">
+            <input type="file" accept="application/json,.json" data-level-file />
+            <span>[ Load Level (.json) ]</span>
+          </label>
+        </div>
+        <div class="inventory-modal__level-status" data-level-status></div>
+
+        ${
+          customLevels
+            ? `<div class="inventory-modal__slot-label">CUSTOM LEVELS</div><div class="inventory-modal__level-row">${customLevels}</div>`
+            : ''
+        }
+      </div>
+    `;
+  }
+
+  /** Wire the PNG importer file picker, sliders, and level file picker. */
+  private bindAssetsInteractions(): void {
+    const fileInput = this.bodyEl.querySelector('[data-png-file]') as HTMLInputElement | null;
+    const thumb = this.bodyEl.querySelector('[data-png-thumb]') as HTMLImageElement | null;
+    const idInput = this.bodyEl.querySelector('[data-png-id]') as HTMLInputElement | null;
+    const heightInput = this.bodyEl.querySelector('[data-png-height]') as HTMLInputElement | null;
+    const radiusInput = this.bodyEl.querySelector('[data-png-radius]') as HTMLInputElement | null;
+    const levelFile = this.bodyEl.querySelector('[data-level-file]') as HTMLInputElement | null;
+    const levelStatus = this.bodyEl.querySelector('[data-level-status]') as HTMLElement | null;
+
+    fileInput?.addEventListener('change', async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      try {
+        const dataUrl = await this.readFileAsDataUrl(file);
+        this.pendingDataUrl = dataUrl;
+        this.pendingAspectRatio = await this.getImageAspectRatio(dataUrl);
+        if (thumb) thumb.src = dataUrl;
+        const baseId = this.sanitizeId(file.name.replace(/\.(png|webp|jpe?g)$/i, ''));
+        this.pendingId = baseId || `asset_${Date.now().toString(36)}`;
+        if (idInput) idInput.value = this.pendingId;
+      } catch {
+        // Ignore unreadable files.
+      }
+    });
+
+    const bindReadout = (input: HTMLInputElement | null, key: string, decimals: number): void => {
+      input?.addEventListener('input', () => {
+        const readout = this.bodyEl.querySelector(`[data-readout="${key}"]`) as HTMLElement | null;
+        if (readout) readout.textContent = Number(input.value).toFixed(decimals);
+      });
+    };
+    bindReadout(heightInput, 'height', 1);
+    bindReadout(radiusInput, 'radius', 1);
+
+    levelFile?.addEventListener('change', async () => {
+      const file = levelFile.files?.[0];
+      if (!file) return;
+      const text = await file.text().catch(() => '');
+      const result = this.services.loadLevelFromJson(text);
+      if (levelStatus) {
+        levelStatus.textContent = result.ok ? `Loaded "${file.name}"` : result.error ?? 'Load failed';
+      }
+      if (result.ok) {
+        this.render();
+        this.bindAssetsInteractions();
+      }
+    });
+  }
+
+  /** Read the pending importer form and register the asset (no auto-drop). */
+  private submitPngImport(): void {
+    if (!this.pendingDataUrl) return;
+
+    const idInput = this.bodyEl.querySelector('[data-png-id]') as HTMLInputElement | null;
+    const kindSelect = this.bodyEl.querySelector('[data-png-kind]') as HTMLSelectElement | null;
+    const heightInput = this.bodyEl.querySelector('[data-png-height]') as HTMLInputElement | null;
+    const radiusInput = this.bodyEl.querySelector('[data-png-radius]') as HTMLInputElement | null;
+    const styleSelect = this.bodyEl.querySelector('[data-png-style]') as HTMLSelectElement | null;
+
+    let id = this.sanitizeId(idInput?.value.trim() ?? '');
+    if (!id) id = this.pendingId;
+    if (!id) return;
+
+    this.services.registerPng({
+      id,
+      kind: (kindSelect?.value ?? 'prop') as CustomPngKind,
+      dataUrl: this.pendingDataUrl,
+      height: parseFloat(heightInput?.value ?? '2.5'),
+      radius: parseFloat(radiusInput?.value ?? '0.8'),
+      style: (styleSelect?.value ?? 'card') as CustomPngStyle,
+      aspectRatio: this.pendingAspectRatio,
+    });
+
+    this.pendingDataUrl = '';
+    this.pendingAspectRatio = 1;
+    this.render();
+  }
+
+  private sanitizeId(raw: string): string {
+    return raw
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  private readFileAsDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(new Error('read failed'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  private getImageAspectRatio(dataUrl: string): Promise<number> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () =>
+        resolve(
+          img.naturalWidth > 0 && img.naturalHeight > 0 ? img.naturalWidth / img.naturalHeight : 1
+        );
+      img.onerror = () => resolve(1);
+      img.src = dataUrl;
+    });
   }
 
   /** Render a labelled group of palette channel pills. */
@@ -494,6 +833,24 @@ export class InventoryModal {
       hexInput.value = hex.toLowerCase();
       this.drawWheel(canvas);
     });
+
+    // Playtest tuning sliders: update the Engine live + refresh the readout.
+    const statInputs = this.bodyEl.querySelectorAll<HTMLInputElement>('input[data-stat]');
+    for (const input of Array.from(statInputs)) {
+      input.addEventListener('input', () => {
+        const value = parseFloat(input.value);
+        const key = input.dataset.stat as keyof PlaytestTuning;
+        if (key === 'maxHealth') this.services.setMaxHealth(value);
+        else if (key === 'maxStamina') this.services.setMaxStamina(value);
+        else if (key === 'healthRegen') this.services.setHealthRegen(value);
+        else if (key === 'staminaRegen') this.services.setStaminaRegen(value);
+        const readout = this.bodyEl.querySelector(`[data-readout="${key}"]`) as HTMLElement | null;
+        if (readout) {
+          const unit = key === 'healthRegen' ? ' HP/s' : key === 'staminaRegen' ? ' ST/s' : '';
+          readout.textContent = `${value}${unit}`;
+        }
+      });
+    }
   }
 
   private drawWheel(canvas: HTMLCanvasElement): void {

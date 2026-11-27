@@ -1,11 +1,11 @@
 import type { EntityKind } from '../data/levelTypes';
-import type { BrushKind, Tool } from './editorTypes';
+import type { EditorMode, PlaceTool, TerrainBrushKind } from './editorTypes';
 
 export interface EditorPanelCallbacks {
-  onToolChange(tool: Tool): void;
-  onBrushKindChange(kind: BrushKind): void;
+  onModeChange(mode: EditorMode): void;
+  onPlaceToolChange(tool: PlaceTool): void;
+  onTerrainBrushChange(kind: TerrainBrushKind): void;
   onBrushRadiusChange(radius: number): void;
-  onEraseChange(erase: boolean): void;
   onEntityKindChange(kind: EntityKind): void;
   onAssetChange(assetId: string): void;
   onShowCollidersChange(show: boolean): void;
@@ -13,12 +13,24 @@ export interface EditorPanelCallbacks {
   onReset(): void;
 }
 
-const TOOLS: Tool[] = ['brush', 'place', 'select'];
-const BRUSH_KINDS: Array<{ id: BrushKind; label: string }> = [
-  { id: 'river', label: 'River (water)' },
-  { id: 'blight', label: 'Blight' },
-  { id: 'path', label: 'Path (dirt)' },
-  { id: 'clearing', label: 'Clearing' },
+const MODES: Array<{ id: EditorMode; label: string }> = [
+  { id: 'place', label: 'Place Assets' },
+  { id: 'terrain', label: 'Terrain & Grass Brushes' },
+];
+
+const PLACE_TOOLS: Array<{ id: PlaceTool; label: string }> = [
+  { id: 'place', label: 'Place' },
+  { id: 'select', label: 'Select' },
+];
+
+const TERRAIN_BRUSHES: Array<{ id: TerrainBrushKind; label: string }> = [
+  { id: 'grass_add', label: 'Paint Grass' },
+  { id: 'grass_erase', label: 'Erase Grass' },
+  { id: 'path', label: 'Dirt Path' },
+  { id: 'water', label: 'Water' },
+  { id: 'land', label: 'Dry Land' },
+  { id: 'blight_add', label: 'Blight' },
+  { id: 'blight_clear', label: 'Cleanse' },
 ];
 
 const ENTITY_KINDS: Array<{ id: EntityKind; label: string }> = [
@@ -38,7 +50,7 @@ const CSS = `
     top: 12px;
     right: 12px;
     z-index: 1000;
-    width: 232px;
+    width: 240px;
     max-height: calc(100vh - 24px);
     overflow-y: auto;
     box-sizing: border-box;
@@ -96,6 +108,26 @@ const CSS = `
   }
   .wf-editor input[type='range'] { accent-color: #4c9a5f; }
   .wf-editor input[type='checkbox'] { accent-color: #4c9a5f; }
+  .wf-editor__brush-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .wf-editor__brush-grid button {
+    padding: 6px 4px;
+    background: #1a212b;
+    color: #cdd6e0;
+    border: 1px solid #2b3642;
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+  }
+  .wf-editor__brush-grid button.is-active {
+    background: #2c4a3a;
+    border-color: #4c9a5f;
+    color: #d9ffe6;
+  }
   .wf-editor__utils {
     display: flex;
     flex-direction: column;
@@ -136,13 +168,14 @@ let styleInjected = false;
 export class EditorPanel {
   public readonly root: HTMLDivElement;
 
-  private readonly toolButtons = new Map<Tool, HTMLButtonElement>();
-  private readonly brushSection: HTMLDivElement;
+  private readonly modeButtons = new Map<EditorMode, HTMLButtonElement>();
+  private readonly placeToolButtons = new Map<PlaceTool, HTMLButtonElement>();
+  private readonly brushButtons = new Map<TerrainBrushKind, HTMLButtonElement>();
+
   private readonly placeSection: HTMLDivElement;
-  private readonly brushKindSelect: HTMLSelectElement;
+  private readonly terrainSection: HTMLDivElement;
   private readonly radiusInput: HTMLInputElement;
   private readonly radiusValue: HTMLSpanElement;
-  private readonly eraseInput: HTMLInputElement;
   private readonly kindSelect: HTMLSelectElement;
   private readonly assetSelect: HTMLSelectElement;
   private readonly collidersInput: HTMLInputElement;
@@ -167,82 +200,34 @@ export class EditorPanel {
     title.textContent = 'Level Editor';
     this.root.appendChild(title);
 
-    // Tool switcher
-    const toolRow = document.createElement('div');
-    toolRow.className = 'wf-editor__row';
-    for (const tool of TOOLS) {
+    // Mode switch.
+    const modeRow = document.createElement('div');
+    modeRow.className = 'wf-editor__row';
+    for (const mode of MODES) {
       const btn = document.createElement('button');
-      btn.textContent = tool[0].toUpperCase() + tool.slice(1);
-      btn.dataset.tool = tool;
-      btn.addEventListener('click', () => this.setTool(tool, true));
-      this.toolButtons.set(tool, btn);
-      toolRow.appendChild(btn);
+      btn.textContent = mode.label;
+      btn.dataset.mode = mode.id;
+      btn.addEventListener('click', () => this.setMode(mode.id));
+      this.modeButtons.set(mode.id, btn);
+      modeRow.appendChild(btn);
     }
-    this.root.appendChild(toolRow);
+    this.root.appendChild(modeRow);
 
-    // Brush section
-    this.brushSection = document.createElement('div');
-    this.brushSection.className = 'wf-editor__section';
-
-    const brushKindField = document.createElement('div');
-    brushKindField.className = 'wf-editor__field';
-    const brushKindLabel = document.createElement('label');
-    brushKindLabel.className = 'wf-editor__label';
-    brushKindLabel.textContent = 'Brush type';
-    this.brushKindSelect = document.createElement('select');
-    for (const k of BRUSH_KINDS) {
-      const opt = document.createElement('option');
-      opt.value = k.id;
-      opt.textContent = k.label;
-      this.brushKindSelect.appendChild(opt);
-    }
-    this.brushKindSelect.addEventListener('change', () => {
-      this.callbacks.onBrushKindChange(this.brushKindSelect.value as BrushKind);
-    });
-    brushKindField.append(brushKindLabel, this.brushKindSelect);
-    this.brushSection.appendChild(brushKindField);
-
-    const radiusField = document.createElement('div');
-    radiusField.className = 'wf-editor__field';
-    const radiusLabel = document.createElement('label');
-    radiusLabel.className = 'wf-editor__label';
-    radiusLabel.textContent = 'Radius ';
-    this.radiusValue = document.createElement('span');
-    this.radiusValue.textContent = '3';
-    radiusLabel.appendChild(this.radiusValue);
-    this.radiusInput = document.createElement('input');
-    this.radiusInput.type = 'range';
-    this.radiusInput.min = '1';
-    this.radiusInput.max = '10';
-    this.radiusInput.step = '1';
-    this.radiusInput.value = '3';
-    this.radiusInput.addEventListener('input', () => {
-      const value = Number(this.radiusInput.value);
-      this.radiusValue.textContent = String(value);
-      this.callbacks.onBrushRadiusChange(value);
-    });
-    radiusField.append(radiusLabel, this.radiusInput);
-    this.brushSection.appendChild(radiusField);
-
-    const eraseField = document.createElement('div');
-    eraseField.className = 'wf-editor__field';
-    const eraseLabel = document.createElement('label');
-    eraseLabel.className = 'wf-editor__label';
-    this.eraseInput = document.createElement('input');
-    this.eraseInput.type = 'checkbox';
-    this.eraseInput.addEventListener('change', () => {
-      this.callbacks.onEraseChange(this.eraseInput.checked);
-    });
-    eraseLabel.append(this.eraseInput, document.createTextNode(' Erase'));
-    eraseField.appendChild(eraseLabel);
-    this.brushSection.appendChild(eraseField);
-
-    this.root.appendChild(this.brushSection);
-
-    // Place section
+    // --- Place Assets section ---
     this.placeSection = document.createElement('div');
     this.placeSection.className = 'wf-editor__section';
-    this.placeSection.hidden = true;
+
+    const placeToolRow = document.createElement('div');
+    placeToolRow.className = 'wf-editor__row';
+    for (const tool of PLACE_TOOLS) {
+      const btn = document.createElement('button');
+      btn.textContent = tool.label;
+      btn.dataset.placeTool = tool.id;
+      btn.addEventListener('click', () => this.setPlaceTool(tool.id));
+      this.placeToolButtons.set(tool.id, btn);
+      placeToolRow.appendChild(btn);
+    }
+    this.placeSection.appendChild(placeToolRow);
 
     const kindField = document.createElement('div');
     kindField.className = 'wf-editor__field';
@@ -274,14 +259,50 @@ export class EditorPanel {
     assetField.append(assetLabel, this.assetSelect);
     this.placeSection.appendChild(assetField);
 
-    const dropHint = document.createElement('div');
-    dropHint.className = 'wf-editor__hint';
-    dropHint.textContent = 'Drop a .json level or pngToAscii asset onto the window.';
-    this.placeSection.appendChild(dropHint);
-
     this.root.appendChild(this.placeSection);
 
-    // Utilities
+    // --- Terrain & Grass Brushes section ---
+    this.terrainSection = document.createElement('div');
+    this.terrainSection.className = 'wf-editor__section';
+    this.terrainSection.hidden = true;
+
+    const brushGrid = document.createElement('div');
+    brushGrid.className = 'wf-editor__brush-grid';
+    for (const brush of TERRAIN_BRUSHES) {
+      const btn = document.createElement('button');
+      btn.textContent = brush.label;
+      btn.dataset.brush = brush.id;
+      btn.addEventListener('click', () => this.setTerrainBrush(brush.id));
+      this.brushButtons.set(brush.id, btn);
+      brushGrid.appendChild(btn);
+    }
+    this.terrainSection.appendChild(brushGrid);
+
+    const radiusField = document.createElement('div');
+    radiusField.className = 'wf-editor__field';
+    const radiusLabel = document.createElement('label');
+    radiusLabel.className = 'wf-editor__label';
+    radiusLabel.textContent = 'Brush Radius ';
+    this.radiusValue = document.createElement('span');
+    this.radiusValue.textContent = '3.0';
+    radiusLabel.appendChild(this.radiusValue);
+    this.radiusInput = document.createElement('input');
+    this.radiusInput.type = 'range';
+    this.radiusInput.min = '1';
+    this.radiusInput.max = '10';
+    this.radiusInput.step = '0.5';
+    this.radiusInput.value = '3';
+    this.radiusInput.addEventListener('input', () => {
+      const value = Number(this.radiusInput.value);
+      this.radiusValue.textContent = value.toFixed(1);
+      this.callbacks.onBrushRadiusChange(value);
+    });
+    radiusField.append(radiusLabel, this.radiusInput);
+    this.terrainSection.appendChild(radiusField);
+
+    this.root.appendChild(this.terrainSection);
+
+    // --- Utilities ---
     const utils = document.createElement('div');
     utils.className = 'wf-editor__utils';
 
@@ -314,7 +335,7 @@ export class EditorPanel {
 
     const hint = document.createElement('div');
     hint.className = 'wf-editor__hint';
-    hint.textContent = 'F2: Toggle Editor | WASD: Pan | Shift: Erase';
+    hint.textContent = 'F2: Toggle Editor | WASD: Pan | LMB: Paint/Place | Del: Delete | R: Rotate';
     this.root.appendChild(hint);
 
     // Keep UI interactions from painting the map or zooming the camera.
@@ -322,7 +343,9 @@ export class EditorPanel {
     this.root.addEventListener('wheel', (e) => e.stopPropagation());
     this.root.addEventListener('keydown', (e) => e.stopPropagation());
 
-    this.setTool('brush', false);
+    this.setMode('place');
+    this.setPlaceTool('place');
+    this.setTerrainBrush('grass_add');
     document.body.appendChild(this.root);
   }
 
@@ -367,14 +390,20 @@ export class EditorPanel {
     this.root.remove();
   }
 
-  private setTool(tool: Tool, notify: boolean): void {
-    for (const [t, btn] of this.toolButtons) {
-      btn.classList.toggle('is-active', t === tool);
-    }
-    this.brushSection.hidden = tool !== 'brush';
-    this.placeSection.hidden = tool !== 'place';
-    if (notify) {
-      this.callbacks.onToolChange(tool);
-    }
+  private setMode(mode: EditorMode): void {
+    for (const [m, btn] of this.modeButtons) btn.classList.toggle('is-active', m === mode);
+    this.placeSection.hidden = mode !== 'place';
+    this.terrainSection.hidden = mode !== 'terrain';
+    this.callbacks.onModeChange(mode);
+  }
+
+  private setPlaceTool(tool: PlaceTool): void {
+    for (const [t, btn] of this.placeToolButtons) btn.classList.toggle('is-active', t === tool);
+    this.callbacks.onPlaceToolChange(tool);
+  }
+
+  private setTerrainBrush(kind: TerrainBrushKind): void {
+    for (const [k, btn] of this.brushButtons) btn.classList.toggle('is-active', k === kind);
+    this.callbacks.onTerrainBrushChange(kind);
   }
 }

@@ -23,6 +23,7 @@ export class InputManager implements IInputManager {
   private lightAbilityQueued = false;
   private cancelQueued = false;
   private inventoryQueued = false;
+  private healQueued = false;
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (MOVE_KEYS.has(event.code)) {
@@ -39,6 +40,9 @@ export class InputManager implements IInputManager {
           break;
         case 'KeyQ':
           this.lightAbilityQueued = true;
+          break;
+        case 'KeyR':
+          this.healQueued = true;
           break;
         case 'KeyI':
           this.inventoryQueued = true;
@@ -172,6 +176,13 @@ export class InputManager implements IInputManager {
   consumeInventory(): boolean {
     const value = this.inventoryQueued;
     this.inventoryQueued = false;
+    return value;
+  }
+
+  /** True once per health-potion press (R), then cleared. */
+  consumeHeal(): boolean {
+    const value = this.healQueued;
+    this.healQueued = false;
     return value;
   }
 

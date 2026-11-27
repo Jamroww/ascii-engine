@@ -1074,6 +1074,7 @@ export class EnemyManager {
     this.spawnClashSpark(px, py, enemy.x, enemy.y);
     this.spawnShockwave(enemy.x, enemy.y, 1.0, 0.95, 0.72);
     this.engine.playClang();
+    this.engine.setDeathContext('You drew before a word was spoken.');
     this.engine.stats.health = 0;
     this.engine.showToast('You drew before a word was spoken.');
   }

@@ -16,6 +16,17 @@ export class PlayerStats {
   health = 100;
   stamina = 200;
 
+  /** Flask charges remaining this attempt (consumable health potion). */
+  potions = 3;
+  maxPotions = 3;
+
+  // Playtest tuning overrides (persisted by the Engine). These sit *beneath*
+  // equipment bonuses so the gear screen still reads the real max pools.
+  private baseMaxHealth = 100;
+  private baseMaxStamina = 200;
+  private healthRegenPerSec = 0;
+  private staminaRegenPerSec = 22;
+
   private bonusMaxHp = 0;
   private bonusMaxStamina = 0;
   private damageReduction = 0;
@@ -29,11 +40,51 @@ export class PlayerStats {
   private dashActive = false;
 
   get maxHealth(): number {
-    return 100 + this.bonusMaxHp;
+    return this.baseMaxHealth + this.bonusMaxHp;
   }
 
   get maxStamina(): number {
-    return 200 + this.bonusMaxStamina;
+    return this.baseMaxStamina + this.bonusMaxStamina;
+  }
+
+  /** Playtest tuning: set the base health pool, scaling current HP cleanly. */
+  setBaseMaxHealth(value: number): void {
+    const oldMax = this.maxHealth;
+    this.baseMaxHealth = Math.max(1, value);
+    const ratio = oldMax > 0 ? this.maxHealth / oldMax : 1;
+    this.health = Math.min(this.maxHealth, this.health * ratio);
+  }
+
+  /** Playtest tuning: set the base stamina pool, scaling current ST cleanly. */
+  setBaseMaxStamina(value: number): void {
+    const oldMax = this.maxStamina;
+    this.baseMaxStamina = Math.max(1, value);
+    const ratio = oldMax > 0 ? this.maxStamina / oldMax : 1;
+    this.stamina = Math.min(this.maxStamina, this.stamina * ratio);
+  }
+
+  setHealthRegen(value: number): void {
+    this.healthRegenPerSec = Math.max(0, value);
+  }
+
+  setStaminaRegen(value: number): void {
+    this.staminaRegenPerSec = Math.max(0, value);
+  }
+
+  getBaseMaxHealth(): number {
+    return this.baseMaxHealth;
+  }
+
+  getBaseMaxStamina(): number {
+    return this.baseMaxStamina;
+  }
+
+  getHealthRegen(): number {
+    return this.healthRegenPerSec;
+  }
+
+  getStaminaRegen(): number {
+    return this.staminaRegenPerSec;
   }
 
   /** Apply equipment-derived bonuses (called once per gameplay frame). */
@@ -146,6 +197,7 @@ export class PlayerStats {
   reset(): void {
     this.health = this.maxHealth;
     this.stamina = this.maxStamina;
+    this.potions = this.maxPotions;
     this.invulnTimer = 0;
     this.dashTimer = 0;
     this.dashCooldown = 0;
@@ -161,18 +213,18 @@ export class PlayerStats {
     const sprinting = wantSprint && moving && !this.dashActive;
 
     // Sprinting burns stamina; resting recovers it. Dashing pauses both.
-    // Regen is bumped ~1.35x (16 -> 22) so the doubled pool refills snappily.
+    // Regen speed is driven live by the Settings playtest slider.
     if (sprinting && this.stamina > 0) {
       this.stamina = Math.max(0, this.stamina - 28 * dt);
     } else if (!sprinting && !this.dashActive) {
-      this.stamina = Math.min(this.maxStamina, this.stamina + 22 * dt);
+      this.stamina = Math.min(this.maxStamina, this.stamina + this.staminaRegenPerSec * dt);
     }
 
     // The cold river saps warmth; solid ground lets the traveler recover.
     if (wading) {
       this.health = Math.max(0, this.health - 5 * dt);
     } else if (this.health > 0) {
-      this.health = Math.min(this.maxHealth, this.health + 3.5 * dt);
+      this.health = Math.min(this.maxHealth, this.health + this.healthRegenPerSec * dt);
     }
 
     return this.stamina > 0;

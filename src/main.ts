@@ -12,7 +12,7 @@ const level = new LevelManager(engine);
 
 engine.setLevelManager(level);
 
-level.loadLevel(LevelManager.createDefaultVillageLevel());
+level.loadLevel(LevelManager.createDefaultVillageLevel(), false);
 
 engine.start();
 

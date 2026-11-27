@@ -78,16 +78,30 @@ const GRASS_VERTEX_SHADER = /* glsl */ `
     vec2 terrainUv = (wrapped + uWorldSize * 0.5) / uWorldSize;
     vec4 t = texture2D(uTerrainMap, terrainUv);
     float edgeDist = (t.r * 255.0 - 128.0) / 128.0 * 8.0; // world-unit SDF
-    float hide = 0.0;
-    if (edgeDist < 0.35) hide = 1.0;
-    if (t.b > 0.55) hide = 1.0;
+    float underwater = edgeDist < 0.35 ? 1.0 : 0.0;
+    float hide = underwater;
+
+    // Grass Override Paint Mask (A channel): 128 == neutral, > 180 == force
+    // grass ON (even across paths/clearings, but never underwater), < 75 ==
+    // force grass OFF (carve clean grass-free courtyards/plazas/trails).
+    if (underwater < 0.5) {
+      float grassOff = t.a < 0.30 ? 1.0 : 0.0;
+      float grassOn = t.a > 0.72 ? 1.0 : 0.0;
+      if (grassOff > 0.5) {
+        hide = 1.0;
+      } else if (grassOn < 0.5 && t.b > 0.55) {
+        hide = 1.0;
+      }
+    }
+
     for (int i = 0; i < 16; i++) {
       if (float(i) >= uCullCount) break;
       vec4 c = uCull[i];
       if (distance(wrapped, c.xy) < c.z) hide = 1.0;
     }
-    // Smoothly clear wheat inside the dueling circle (disabled when radius = 0).
-    if (uClearingRadius > 0.01) {
+    // Smoothly clear wheat inside the dueling circle (disabled when radius = 0,
+    // and ignored while grass is force-painted on).
+    if (uClearingRadius > 0.01 && t.a <= 0.72) {
       float clear = 1.0 - smoothstep(uClearingRadius, uClearingRadius + 2.0, distance(wrapped, uClearingCenter));
       hide = max(hide, clear);
     }
@@ -190,15 +204,25 @@ const FLOWER_VERTEX_SHADER = /* glsl */ `
     vec2 terrainUv = (wrapped + uWorldSize * 0.5) / uWorldSize;
     vec4 t = texture2D(uTerrainMap, terrainUv);
     float edgeDist = (t.r * 255.0 - 128.0) / 128.0 * 8.0; // world-unit SDF
-    float hide = 0.0;
-    if (edgeDist < 0.35) hide = 1.0;
-    if (t.b > 0.55) hide = 1.0;
+    float underwater = edgeDist < 0.35 ? 1.0 : 0.0;
+    float hide = underwater;
+
+    if (underwater < 0.5) {
+      float grassOff = t.a < 0.30 ? 1.0 : 0.0;
+      float grassOn = t.a > 0.72 ? 1.0 : 0.0;
+      if (grassOff > 0.5) {
+        hide = 1.0;
+      } else if (grassOn < 0.5 && t.b > 0.55) {
+        hide = 1.0;
+      }
+    }
+
     for (int i = 0; i < 16; i++) {
       if (float(i) >= uCullCount) break;
       vec4 c = uCull[i];
       if (distance(wrapped, c.xy) < c.z) hide = 1.0;
     }
-    if (uClearingRadius > 0.01) {
+    if (uClearingRadius > 0.01 && t.a <= 0.72) {
       float clear = 1.0 - smoothstep(uClearingRadius, uClearingRadius + 2.0, distance(wrapped, uClearingCenter));
       hide = max(hide, clear);
     }
@@ -350,9 +374,11 @@ export class GrassLayer implements IRenderLayer {
       const x = (Math.random() - 0.5) * areaSize;
       const y = (Math.random() - 0.5) * areaSize;
 
-      // Cleared off the river channel/shoreline and the dirt footpath.
+      // Cleared only off the river channel/shoreline. Dirt paths keep their
+      // packed-earth look via the shader's `t.b > 0.55` hide, but blades are
+      // still placed there so the editor's "Paint Grass" force-ON override can
+      // reveal them on demand.
       if (terrain.getRiverSDF(x, y) < 0.25) continue;
-      if (terrain.getPathMask(x, y) > 0.6) continue;
 
       const heightScale = 0.8 + Math.random() * 0.5;
       const widthScale = 0.7 + Math.random() * 0.6;
@@ -395,7 +421,6 @@ export class GrassLayer implements IRenderLayer {
       const y = (Math.random() - 0.5) * areaSize;
 
       if (terrain.getRiverSDF(x, y) < 0.25) continue;
-      if (terrain.getPathMask(x, y) > 0.6) continue;
 
       flowerDummy.position.set(x, 0.02, -y);
       flowerDummy.rotation.set(0, Math.random() * Math.PI, 0);

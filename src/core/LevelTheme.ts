@@ -26,7 +26,7 @@ export type WeatherMode = 'rain' | 'petals';
 
 /** Level-wide atmosphere + biome toggles that sit *beside* the palette. */
 export interface LevelTheme {
-  id: 'act1_harbor' | 'act2_wheatfield';
+  id: string;
   palette: PaletteConfig;
   /** Directional light (moon / sun) intensity. */
   sunIntensity: number;
@@ -49,15 +49,15 @@ export interface LevelTheme {
 export const ACT1_THEME: LevelTheme = {
   id: 'act1_harbor',
   palette: {
-    foliageBase: '#071e15',
-    foliageTip: '#194d38',
+    foliageBase: '#09630d',
+    foliageTip: '#665a23',
     sunColor: '#e2eeff',
-    skyFillColor: '#7c98b8',
-    groundColor: '#1b2822',
-    asciiVoidColor: '#000000',
-    bloomTint: '#d8e8ff',
-    waterColor: '#1b4566',
-    structureColor: '#9cb0c4',
+    skyFillColor: '#acd3ff',
+    groundColor: '#ffb100',
+    asciiVoidColor: '#1b204a',
+    bloomTint: '#9528ff',
+    waterColor: '#9891ff',
+    structureColor: '#ffdd41',
   },
   sunIntensity: 3.0,
   skyFillIntensity: 0.34,
@@ -95,7 +95,11 @@ export const ACT2_THEME: LevelTheme = {
 };
 
 export function getLevelTheme(id: string): LevelTheme {
-  return id === 'act2_wheatfield' ? ACT2_THEME : ACT1_THEME;
+  if (id === 'act2_wheatfield') return ACT2_THEME;
+  if (id === 'act1_harbor') return ACT1_THEME;
+  // Custom levels default to the Act 1 night harbor atmosphere, but keep their
+  // own id so the engine can distinguish them from the built-in levels.
+  return { ...ACT1_THEME, id, palette: clonePalette(ACT1_THEME.palette) };
 }
 
 /** Convert a `#rrggbb` hex string into a fresh THREE.Color (no shared state). */

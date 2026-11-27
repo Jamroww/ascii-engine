@@ -15,7 +15,7 @@ import { WorldModelsLayer } from '../rendering/WorldModelsLayer';
 import type { WorldModelPlacement } from '../rendering/WorldModelsLayer';
 import { AssetRegistry } from '../data/AssetRegistry';
 import type { LevelData, PlacedEntity } from '../data/levelTypes';
-import { getLevelTheme, hexToColor, type LevelTheme } from './LevelTheme';
+import { getLevelTheme, clonePalette, hexToColor, type LevelTheme } from './LevelTheme';
 
 /**
  * Owns the active level: its `LevelData`, `TerrainGrid`, and the world layers
@@ -28,6 +28,9 @@ export class LevelManager {
   private terrain!: TerrainGrid;
   private theme: LevelTheme = getLevelTheme('act1_harbor');
   private readonly engine: Engine;
+
+  /** Custom levels loaded via the Level Loader (selectable from the UI). */
+  private readonly customLevels = new Map<string, LevelData>();
 
   private ground: GroundLayer | null = null;
   private grass: GrassLayer | null = null;
@@ -185,9 +188,19 @@ export class LevelManager {
     this.setShrinePurified(id, true);
   }
 
-  public loadLevel(data: LevelData): void {
+  public loadLevel(data: LevelData, announce = true): void {
     this.data = data;
     this.theme = getLevelTheme(data.id);
+    // Apply an embedded palette override (Level Exporter) on top of the theme.
+    if (data.palette) {
+      this.theme = { ...this.theme, palette: clonePalette(data.palette) };
+    }
+    // Register any embedded custom PNG assets so they appear in the library.
+    if (data.customAssets) {
+      for (const asset of data.customAssets) {
+        AssetRegistry.registerCustomPng(asset);
+      }
+    }
     this.terrain = TerrainGrid.fromBase64(data.terrainBase64, data.gridResolution, data.worldSize);
     this.engine.setTerrain(this.terrain);
     this.engine.setSpawnPoint(data.spawn.x, data.spawn.y);
@@ -207,17 +220,37 @@ export class LevelManager {
     // Push the theme (lights, void/bloom) onto the engine.
     this.engine.applyTheme(this.theme);
 
-    if (!this.announcedOpening && data.id === 'act1_harbor') {
-      this.announcedOpening = true;
-      this.engine.showToast('Something followed the boat ashore — push through the alley to the village!');
-    } else if (data.id === 'act2_wheatfield') {
-      this.engine.showToast('The great tree watches. The Ronin waits beneath it.');
+    if (announce) {
+      if (!this.announcedOpening && data.id === 'act1_harbor') {
+        this.announcedOpening = true;
+        this.engine.showToast('Something followed the boat ashore — push through the alley to the village!');
+      } else if (data.id === 'act2_wheatfield') {
+        this.engine.showToast('The great tree watches. The Ronin waits beneath it.');
+      }
     }
   }
 
   /** Active level id, read by the Settings Level Selector. */
-  public getActiveThemeId(): 'act1_harbor' | 'act2_wheatfield' {
+  public getActiveThemeId(): string {
     return this.theme.id;
+  }
+
+  /** Add a custom level (from the Level Loader) to the selectable list. */
+  public addCustomLevel(data: LevelData): void {
+    this.customLevels.set(data.id, data);
+  }
+
+  public getCustomLevel(id: string): LevelData | undefined {
+    return this.customLevels.get(id);
+  }
+
+  public getCustomLevels(): LevelData[] {
+    return [...this.customLevels.values()];
+  }
+
+  /** The live level data (used by the Death Screen retry + Level Exporter). */
+  public getLevelData(): LevelData {
+    return this.exportLevelData();
   }
 
   /** Live-update the wheat/grass foliage colours (Palette Studio). */
@@ -267,6 +300,14 @@ export class LevelManager {
     this.applyEntityChange(entity);
   }
 
+  /** Rotate a placed entity (custom PNG assets) around its Y axis. */
+  public rotateEntity(id: string, deltaRadians: number): void {
+    const entity = this.data.entities.find((e) => e.id === id);
+    if (!entity) return;
+    entity.rotation = ((entity.rotation ?? 0) + deltaRadians) % (Math.PI * 2);
+    this.applyEntityChange(entity);
+  }
+
   /** Swap a placed Light Shrine between dormant and purified states. */
   public setShrinePurified(id: string, purified: boolean): void {
     const entity = this.data.entities.find((e) => e.id === id);
@@ -283,12 +324,20 @@ export class LevelManager {
   }
 
   public exportLevelData(): LevelData {
+    const referenced = new Set<string>();
+    for (const e of this.data.entities) {
+      if (AssetRegistry.isCustomPng(e.assetId)) referenced.add(e.assetId);
+    }
+    const customAssets = AssetRegistry.getCustomPngAssets().filter((a) => referenced.has(a.id));
+
     return {
       ...this.data,
       worldSize: this.terrain.worldSize,
       gridResolution: this.terrain.resolution,
       terrainBase64: this.terrain.toBase64(),
       entities: this.data.entities.map((e) => ({ ...e })),
+      palette: clonePalette(this.theme.palette),
+      customAssets,
     };
   }
 
@@ -505,6 +554,7 @@ export class LevelManager {
         x: e.x,
         y: e.y,
         radius: e.radius ?? AssetRegistry.getModelRadius(e.assetId),
+        rotation: e.rotation,
         colliders:
           e.radius === undefined
             ? (AssetRegistry.getModelColliders(e.assetId) ?? undefined)
